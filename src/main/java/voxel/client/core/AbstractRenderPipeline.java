@@ -170,9 +170,15 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
                 }
             }
 
+            // The fullscreen triangle already covers the whole (possibly
+            // lodRenderScale-downscaled) target. Sampling the full-resolution
+            // vanilla depth with UV * target/source crops it to the top-left
+            // corner whenever lodRenderScale < 1. That made the stencil/depth
+            // mask disagree with the screen and let near LOD blocks occlude the
+            // far LOD. UV 0..1 maps the complete source into the scaled target.
             this.depthCopy.shader()
                     .image(0, srcDepth)
-                    .pushFloat4(0, ((float) width) / srcWidth, ((float) height) / srcHeight, depthScale, depthBias);
+                    .pushFloat4(0, 1.0f, 1.0f, depthScale, depthBias);
             VkState.setColorMask(false, false, false, false);
             VkState.setDepthTest(true);
             VkState.setDepthWrite(true);
