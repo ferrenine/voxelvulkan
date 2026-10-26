@@ -199,13 +199,26 @@ void setupQuad(out QuadData quad, const in Quad rawQuad, uvec2 sPos, bool genera
     #ifdef USE_SINGLE_TRI
     faceSize *= 2;
     #endif
-    vec3 quadStart = extractPos(rawQuad);
+    vec3 cellStart = extractPos(rawQuad);
     float depthOffset = extractFaceIndentation(faceData);
-    quadStart += swizzelDataAxis(face>>1, vec3(faceSize.xz, mix(depthOffset, 1-depthOffset, float(face&1u))));
+    uint faceAxis = face >> 1u;
+    bool positiveFace = (face & 1u) != 0u;
+
+    // Cell coordinates scale with the LOD cell size, but the face indentation
+    // is a constant world-space offset (water sits 1/8 block below the cell
+    // top; slabs/fences have fixed insets). Scaling the indentation as well
+    // would sink the far LOD water below the near LOD0 surface by
+    // depthOffset * (lodScale - 1) blocks and leave a visible step at the
+    // LOD boundary.
+    vec3 inPlaneOffset = swizzelDataAxis(faceAxis, vec3(faceSize.xz, 0.0));
+    float scaledCellAxis = cellStart[faceAxis] * lodScale;
+    float axisPos = scaledCellAxis + (positiveFace ? lodScale - depthOffset : depthOffset);
+    vec3 axisOffset = swizzelDataAxis(faceAxis, vec3(0.0, 0.0, axisPos - scaledCellAxis));
 
     quad.lodScale = lodScale;
-    quad.axis = face>>1;
-    quad.basePoint = (quadStart*lodScale)+vec3(baseSection<<5);
+    quad.axis = faceAxis;
+    quad.basePoint = cellStart * lodScale + inPlaneOffset * lodScale
+            + axisOffset + vec3(baseSection << 5);
     if (model.offsetInfo != 0u) {
         // Offset models are meshed one quad per block, so the quad's cell is
         // the block (the cell origin at coarser LODs, scaled with the cell).
