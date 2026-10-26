@@ -3,6 +3,7 @@
   "package": "voxel.client.mixin.beryl",
   "compatibilityLevel": "JAVA_21",
   "client": [
+    "MixinBerylRenderingPipeline",
     "MixinBerylShadowMap",
     "MixinBerylShadowMapSectionGraph"
   ],
