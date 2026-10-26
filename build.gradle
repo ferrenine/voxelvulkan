@@ -1,0 +1,226 @@
+plugins {
+    id 'fabric-loom' version "${loom_version}"
+    id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    mavenCentral()
+
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "Modrinth"
+                url = "https://api.modrinth.com/maven"
+            }
+        }
+        filter {
+            includeGroup "maven.modrinth"
+        }
+    }
+}
+
+loom {
+    accessWidenerPath = file("src/main/resources/voxel.accesswidener")
+    runs {
+        client {
+            // The JVM's ergonomic default on a 32G machine is -Xmx8G. Together
+            // with the 1G geometry buffer, the 0.5G model atlas and Beryl's
+            // framebuffers that exhausts the native commit limit and G1 fails
+            // to mmap more heap ("Native memory allocation (mmap) failed to map
+            // ... for G1 virtual space"). 4G is plenty for the client and
+            // leaves room for Vulkan/native allocations below the 32G
+            // compressed-oops boundary.
+            vmArg "-Xmx4G"
+        }
+    }
+}
+
+dependencies {
+    // LWJGL version shared by Minecraft's bundled LWJGL, VulkanMod's jar-in-jar stack and this mod.
+    def lwjglVersion = "3.3.3"
+
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    // ------------------------------------------------------------------
+    // Renderer platform: VulkanMod (required at runtime, provided by user)
+    // Beryl (optional, shader pipeline integration)
+    // ------------------------------------------------------------------
+    modCompileOnly files('libs/VulkanMod-0.6.8+1.21.11.jar')
+    modLocalRuntime files('libs/VulkanMod-0.6.8+1.21.11.jar')
+
+    modCompileOnly files('libs/beryl_1.21.11-0.2.1-alpha.jar')
+
+    // LWJGL bindings used directly. Compile against the Maven artifacts; in a normal installation
+    // the classes are provided at runtime by VulkanMod's jar-in-jar (META-INF/jars/lwjgl-*.jar).
+    compileOnly "org.lwjgl:lwjgl-vulkan:$lwjglVersion"
+    compileOnly "org.lwjgl:lwjgl-shaderc:$lwjglVersion"
+
+    // Dev runtime only — deliberately NOT `include`d, so the published jar does not ship a second
+    // copy of the stack next to VulkanMod's own nested jars.
+    // Loom does not expand a third-party mod jar's nested jars into the dev classpath, so without
+    // these `runClient` dies while VulkanMod creates the Vulkan instance:
+    //   java.lang.NoClassDefFoundError: org/lwjgl/vulkan/VkApplicationInfo
+    //   Caused by: java.lang.ClassNotFoundException: org.lwjgl.vulkan.VkApplicationInfo
+    //       at net.vulkanmod.vulkan.Vulkan.createInstance(Vulkan.java:209)
+    // lwjgl-vulkan ships no Windows/Linux natives (it binds the system vulkan-1.dll / libvulkan.so);
+    // add :natives-linux / :natives-macos(-arm64) for lwjgl-vma and lwjgl-shaderc on those platforms.
+    runtimeOnly "org.lwjgl:lwjgl-vulkan:$lwjglVersion"
+    runtimeOnly "org.lwjgl:lwjgl-vma:$lwjglVersion"
+    runtimeOnly "org.lwjgl:lwjgl-vma:$lwjglVersion:natives-windows"
+    runtimeOnly "org.lwjgl:lwjgl-shaderc:$lwjglVersion"
+    runtimeOnly "org.lwjgl:lwjgl-shaderc:$lwjglVersion:natives-windows"
+
+    // ------------------------------------------------------------------
+    // LOD storage engines (jar-in-jar)
+    // ------------------------------------------------------------------
+    include(implementation('org.rocksdb:rocksdbjni:10.2.1'))
+    include(implementation('org.tukaani:xz:1.10'))
+    include(implementation('org.xerial:sqlite-jdbc:3.49.1.0'))
+
+    // LMDB / ZSTD through LWJGL bindings (classes provided by MC's LWJGL, natives bundled here)
+    include(implementation("org.lwjgl:lwjgl-lmdb:$lwjglVersion"))
+    include(implementation("org.lwjgl:lwjgl-zstd:$lwjglVersion"))
+    include(runtimeOnly("org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-windows"))
+    include(runtimeOnly("org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-windows"))
+    include(runtimeOnly("org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-linux"))
+    include(runtimeOnly("org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-linux"))
+    include(runtimeOnly("org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-macos"))
+    include(runtimeOnly("org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-macos"))
+    include(runtimeOnly("org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-macos-arm64"))
+    include(runtimeOnly("org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-macos-arm64"))
+
+    // Redis backend (optional)
+    include(implementation('redis.clients:jedis:5.1.0'))
+    include(implementation('org.apache.commons:commons-pool2:2.12.0'))
+}
+
+processResources {
+    inputs.property "version", project.version
+
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
+}
+
+def targetJavaVersion = 21
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = "UTF-8"
+    it.options.release = targetJavaVersion
+    it.options.deprecation = true
+}
+
+java {
+    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
+    if (JavaVersion.current() < javaVersion) {
+        toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
+    }
+    withSourcesJar()
+}
+
+jar {
+    from("LICENSE") {
+        rename { "${it}_${project.base.archivesName.get()}" }
+    }
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = project.archives_base_name
+            from components.java
+        }
+    }
+    repositories {
+    }
+}
+
+// ============================================================
+// RenderDoc：固定使用本地 1.46_64 压缩包，不走 loom 的在线下载
+// ------------------------------------------------------------
+// loom 1.14.10 的 RenderDoc 支持没有可配置项，全部硬编码
+// （net/fabricmc/loom/task/LoomTasks.java#configureRenderDocTasks）：
+//   版本 = LoomVersions.RENDERDOC → 1.46_64
+//   url  = https://maven.fabricmc.net/org/renderdoc/RenderDoc_1.46_64.zip
+// 且下载工具 net.fabricmc.loom.util.download.Download 走 java.net.http.HttpClient，
+// 不支持 file: URL，所以不能只改 url —— 这里直接替换 downloadRenderDoc 的动作，
+// 改成「从本地 zip 复制」，extractRenderDoc 的源是 zipTree(downloadRenderDoc 输出)，
+// 会自动跟着换包，全程不联网。
+// ============================================================
+def renderDocVersion = '1.46_64'                                                 // 与 zip 内顶层目录同名
+def renderDocZip     = file('D:/package/Github Resource/RenderDoc_1.46_64.zip')  // 本地离线包
+def renderDocOutDir  = layout.buildDirectory.dir('renderdoc')
+
+tasks.named('downloadRenderDoc').configure { t ->
+    t.getOutput().set(layout.buildDirectory.file("RenderDoc_${renderDocVersion}.zip"))
+    t.getUrl().set(renderDocZip.absolutePath)   // 仅作记录（动作已换成本地复制，不联网）
+    t.getInputs().file(renderDocZip)            // 真正参与增量判定的输入
+    t.setActions([
+        ({ task ->
+            if (!renderDocZip.exists()) {
+                throw new GradleException("找不到本地 RenderDoc 包：${renderDocZip}（请检查 build.gradle 的 renderDocZip）")
+            }
+            def dst = t.getOutput().get().asFile
+            dst.parentFile.mkdirs()
+            java.nio.file.Files.copy(renderDocZip.toPath(), dst.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.COPY_ATTRIBUTES)
+            println "[renderDoc] 使用本地包 ${renderDocZip} -> ${dst}"
+        } as org.gradle.api.Action)
+    ])
+}
+
+// loom 原本通过 getRenderDocExecutable() 的任务输出 provider 隐式依赖 extractRenderDoc；
+// 换成普通路径 provider 后这条隐式依赖会消失，clean 之后直接跑 runClientRenderDoc
+// 会找不到 renderdoccmd.exe，所以这里显式补 dependsOn。
+//
+// 另外：本机 renderdoccmd.exe 会把被启动的 java 进程降到 Low 完整性级别，
+// 导致 Fabric 开发环境运行时 remap 写不了 %TEMP% / run/.fabric（"Failed to remap mods!"）。
+// 所以 runClientRenderDoc 改为调用 tools/renderdoc-layer-launcher.cmd：
+// 跳过 renderdoccmd，直接用 RenderDoc 的 Vulkan 层注入启动 java。
+tasks.named('runClientRenderDoc').configure { t ->
+    t.dependsOn('extractRenderDoc')
+    t.getRenderDocExecutable().set(file("tools/renderdoc-layer-launcher.cmd"))
+}
+
+tasks.named('startRenderDocUI').configure { t ->
+    t.dependsOn('extractRenderDoc')
+    t.getRenderDocExecutable().set(renderDocOutDir.map { it.file("RenderDoc_${renderDocVersion}/qrenderdoc.exe") })
+}
+
+// ============================================================
+// RenderDoc 抓帧（Vulkan layer 方式）：`gradlew runClient -Prenderdoc`
+// ------------------------------------------------------------
+// 为什么不用 loom 的 runClientRenderDoc：它通过 renderdoccmd.exe 启动目标进程，
+// 在本机 RenderDoc 1.46 会把被启动进程放到 **Low 完整性级别**，导致 Fabric 开发
+// 环境的运行时 remap（要写 %TEMP%、run/.fabric）报 AccessDenied，游戏起不来 /
+// RenderDoc 注入不进去。
+// 这里改用 RenderDoc 的 Vulkan 隐式层：不做系统级注册，只给 runClient 进程注入
+// VK_LAYER_PATH + VK_INSTANCE_LAYERS，游戏正常启动、层随之加载，进游戏后按 F12
+// 即可抓帧（.rdc 默认写到 %TEMP%）。
+// ============================================================
+if (project.hasProperty('renderdoc')) {
+    loom {
+        runs {
+            client {
+                def rcdDir = file("build/renderdoc/RenderDoc_${renderDocVersion}")
+                // loom 的 JavaExec 会用 run config 的 environment 覆盖环境变量，
+                // 所以这里把当前环境整体带上，再追加 Vulkan 层的两个变量。
+                System.getenv().each { k, v -> environmentVariable(k, v) }
+                environmentVariable('VK_LAYER_PATH', rcdDir.absolutePath)
+                environmentVariable('VK_INSTANCE_LAYERS', 'VK_LAYER_RENDERDOC_Capture')
+                environmentVariable('RENDERDOC_HOOK_EGL', '1') // 无害；部分栈需要
+            }
+        }
+    }
+}

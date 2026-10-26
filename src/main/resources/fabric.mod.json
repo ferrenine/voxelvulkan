@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "voxel",
+  "version": "${version}",
+  "name": "Voxel",
+  "description": "Next-generation GPU-driven Voxel LOD rendering engine for Minecraft 1.21.11 on Fabric, built on the Vulkan renderer (VulkanMod) with optional Beryl shader pipeline integration.",
+  "authors": [
+    "Voxel"
+  ],
+  "license": "LGPL-3.0",
+  "icon": "assets/voxel/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "main": [
+      "voxel.Voxel"
+    ],
+    "client": [
+      "voxel.client.VoxelClient"
+    ]
+  },
+  "mixins": [
+    "voxel.common.mixins.json",
+    "voxel.client.mixins.json",
+    "voxel.vulkanmod.mixins.json",
+    "voxel.beryl.mixins.json"
+  ],
+  "accessWidener": "voxel.accesswidener",
+  "depends": {
+    "fabricloader": ">=0.18.4",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*",
+    "vulkanmod": ">=0.6.7"
+  },
+  "recommends": {
+    "beryl": ">=0.2.0"
+  }
+}

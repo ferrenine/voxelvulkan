@@ -1,0 +1,61 @@
+{
+  "voxel.title": "Voxel",
+
+  "voxel.page.engine": "Engine & Core",
+  "voxel.page.display": "Display & Fidelity",
+  "voxel.page.atmosphere": "Atmosphere & Shaders",
+
+  "voxel.option.enabled": "Engine Master",
+  "voxel.option.enabled.tooltip": "Master activation toggle for the Voxel LOD engine. When active, distant world geometry is dynamically captured into compressed sparse voxel octrees and rendered directly on the GPU.",
+
+  "voxel.option.worker_threads": "Worker Threads",
+  "voxel.option.worker_threads.tooltip": "Number of parallel CPU worker threads allocated for voxel processing and terrain meshing. Higher values accelerate LOD generation on multi-core processors.",
+
+  "voxel.option.share_sodium_threads": "Share Sodium Pool",
+  "voxel.option.share_sodium_threads.tooltip": "Coordinates background worker tasks with Sodium's chunk mesher pool, minimizing CPU cache thrashing and eliminating micro-stutters during high-speed exploration.",
+
+  "voxel.option.world_sampling": "World Sampling",
+  "voxel.option.world_sampling.tooltip": "Enables real-time capture and compression of newly generated or modified Minecraft chunks into persistent LOD voxel octrees as you traverse the world.",
+
+  "voxel.option.vram_budget": "VRAM Budget",
+  "voxel.option.vram_budget.tooltip": "Target video memory allocated for LOD geometry storage. Auto mode dynamically adjusts allocation based on detected GPU VRAM (512MB for 4GB cards up to 1.5GB for 12GB+ cards) to completely prevent out-of-memory crashes.",
+
+  "voxel.option.auto_pregen": "Auto Pre-generation",
+  "voxel.option.auto_pregen.tooltip": "Automatically pre-generates distant LOD octree data around world spawn upon joining a Singleplayer world, eliminating empty horizon holes before you start moving.",
+
+  "voxel.option.auto_pregen_radius": "Pre-gen Radius",
+  "voxel.option.auto_pregen_radius.tooltip": "Distance in chunks surrounding spawn to pre-build during automated pre-generation (16 to 128 chunks).",
+
+  "voxel.option.auto_pregen_threads": "Pre-gen Workers",
+  "voxel.option.auto_pregen_threads.tooltip": "Number of background threads dedicated strictly to world pre-generation pipelines.",
+
+  "voxel.option.f3_diagnostics": "F3 Diagnostics",
+  "voxel.option.f3_diagnostics.tooltip": "Displays real-time octree traversal counts, GPU indirect draw batches, and VRAM memory footprint on the Minecraft F3 debug screen.",
+
+  "voxel.option.rendering": "LOD Rendering",
+  "voxel.option.rendering.tooltip": "Enables GPU-driven drawing of distant voxel terrain. Disabling stops rasterization to save GPU power while background data sampling and octree caching remain active.",
+
+  "voxel.option.mesh_precision": "Mesh Precision",
+  "voxel.option.mesh_precision.tooltip": "Screen-space pixel threshold before subdividing octree nodes into finer geometry. Ultra and Balanced settings render sharper terrain features at the cost of higher GPU raster load, while Performance maximizes framerate.",
+
+  "voxel.option.horizon_distance": "Horizon Distance",
+  "voxel.option.horizon_distance.tooltip": "Maximum horizontal visibility radius for distant LOD terrain in chunks (e.g., 16 sections = 512 chunks / ~8 kilometers of rendered landscape).",
+
+  "voxel.option.seam_overlap": "Seam Overlap",
+  "voxel.option.seam_overlap.tooltip": "Geometric overlap margin between vanilla chunk borders and distant LOD meshes. A setting of 1-2 chunks eliminates visible seam cracks and prevents chunk pop-in during flight.",
+
+  "voxel.option.atmospheric_fog": "Atmospheric Fog",
+  "voxel.option.atmospheric_fog.tooltip": "Seamlessly harmonizes distant LOD terrain with biome atmospheric colors and vanilla horizon fog, producing a unified natural horizon.",
+
+  "voxel.option.planetary_curvature": "Planetary Curvature",
+  "voxel.option.planetary_curvature.tooltip": "Simulates standing on a spherical celestial body by curving distant terrain downward over vast horizons (0 = Flat World; 1 = Earth scale; higher values simulate smaller planets).",
+
+  "voxel.option.shader_shadows": "Shader Shadows",
+  "voxel.option.shader_shadows.tooltip": "Extends sunlight attenuation, cloud shadows, and ambient shading from Beryl shaders across distant LOD landscapes.",
+
+  "voxel.option.water_ssr": "Water SSR",
+  "voxel.option.water_ssr.tooltip": "Renders real-time Screen-Space Reflections (SSR) and dynamic wave normal highlights on distant oceans, rivers, and water bodies.",
+
+  "key.categories.voxel": "Voxel",
+  "key.voxel.reload": "Reload LOD Renderer (Ctrl+R)"
+}

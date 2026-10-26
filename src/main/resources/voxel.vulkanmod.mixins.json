@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "package": "voxel.client.mixin.vulkanmod",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MixinVkDeviceManager",
+    "MixinVkImageBuilder",
+    "MixinVkRenderer",
+    "MixinVkRenderSection",
+    "MixinVkWorldRenderer"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

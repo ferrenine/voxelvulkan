@@ -1,0 +1,36 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D srcDepth;
+layout(binding = 1, r32f) uniform writeonly restrict image2D dstMip;
+layout(binding = 2) uniform sampler2D vanillaDepth;
+
+layout(push_constant) uniform PushConstants {
+    vec2 invDstSize;
+    int dstWidth;
+    int dstHeight;
+    float depthScale;
+    float depthBias;
+};
+
+void main() {
+    ivec2 dstCoord = ivec2(gl_GlobalInvocationID.xy);
+    if (dstCoord.x >= dstWidth || dstCoord.y >= dstHeight) {
+        return;
+    }
+    vec2 uv = (vec2(dstCoord) + vec2(0.5)) * invDstSize;
+    vec4 depths = textureGather(srcDepth, uv, 0);
+    if (depthScale != 0.0f) {
+        if (depths.x == 0.0f || depths.y == 0.0f || depths.z == 0.0f || depths.w == 0.0f) {
+            float vd = textureLod(vanillaDepth, uv, 0.0f).r;
+            float conv = clamp(vd * depthScale + depthBias, 0.0001f, 0.9999f);
+            if (depths.x == 0.0f) depths.x = conv;
+            if (depths.y == 0.0f) depths.y = conv;
+            if (depths.z == 0.0f) depths.z = conv;
+            if (depths.w == 0.0f) depths.w = conv;
+        }
+    }
+    float maxD = max(max(depths.x, depths.y), max(depths.z, depths.w));
+    imageStore(dstMip, dstCoord, vec4(maxD, 0.0, 0.0, 0.0));
+}

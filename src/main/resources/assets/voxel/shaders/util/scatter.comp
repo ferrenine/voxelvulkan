@@ -1,0 +1,41 @@
+#version 460 core
+
+layout(local_size_x=128) in;
+
+//Input record = 5 uvec4s: [4 destination indices][4 payloads]. Each thread
+// handles one (dest, payload) pair; the destination's top bit selects which
+// of the two output buffers receives it.
+layout(binding = INPUT_BUFFER_BINDING, std430) restrict readonly buffer InputBuffer {
+    uvec4[] inData;
+};
+
+layout(binding = OUTPUT_BUFFER1_BINDING, std430) restrict writeonly buffer OutputBuffer1 {
+    uvec4[] output1;
+};
+
+layout(binding = OUTPUT_BUFFER2_BINDING, std430) restrict writeonly buffer OutputBuffer2 {
+    uvec4[] output2;
+};
+
+layout(push_constant) uniform PushConstants {
+    uint count;
+};
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= count) {
+        return;
+    }
+
+    uint lane = id & 3u;
+    uint record = (id >> 2u) * 5u;
+
+    uint dest = inData[record][lane];
+    uvec4 payload = inData[record + 1u + lane];
+
+    if ((dest & 0x80000000u) == 0u) {
+        output1[dest] = payload;
+    } else {
+        output2[dest & 0x7FFFFFFFu] = payload;
+    }
+}

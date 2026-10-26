@@ -1,0 +1,29 @@
+#version 460 core
+#define WORK_SIZE 256
+layout(local_size_x=WORK_SIZE) in;
+
+//One workgroup per copy job: header (src, dst, count in uvec2 elements).
+layout(binding = INPUT_HEADER_BUFFER_BINDING, std430) restrict readonly buffer InputHeaderBuffer {
+    uvec4[] dataCopyHeader;
+};
+
+layout(binding = INPUT_DATA_BUFFER_BINDING, std430) restrict readonly buffer InputDataBuffer {
+    uvec2[] dataInBuffer;
+};
+
+layout(binding = OUTPUT_BUFFER_BINDING, std430) restrict writeonly buffer OutputBuffer {
+    uvec2[] outputBuffer;
+};
+
+void main() {
+    uvec4 job = dataCopyHeader[gl_WorkGroupID.x];
+    uint src = job.x;
+    uint dst = job.y;
+    uint len = job.z;
+
+    //Threads stride the range: lane L copies elements L, L+WORK_SIZE, …
+    // (coalesced accesses; no per-lane chunk split to keep in sync).
+    for (uint i = gl_LocalInvocationID.x; i < len; i += WORK_SIZE) {
+        outputBuffer[dst + i] = dataInBuffer[src + i];
+    }
+}

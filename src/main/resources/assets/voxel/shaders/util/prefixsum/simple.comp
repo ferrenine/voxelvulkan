@@ -1,0 +1,38 @@
+#version 460
+#define WORK_SIZE 256
+
+//Initial exclusive prefix-sum over batches of WORK_SIZE elements.
+// Each thread's four counters are scanned as a single flattened value, then
+// its own running offsets are re-emitted.
+layout(local_size_x=WORK_SIZE) in;
+
+layout(binding = IO_BUFFER, std430) buffer InputBuffer {
+    uvec4[] ioCount;
+};
+
+shared uint scanned[WORK_SIZE];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+
+    //Flatten each thread's uvec4: xyz prefix within the element, plus its
+    // total, so one scalar represents the whole element in the scan.
+    uvec4 dat = ioCount[lane];
+    uint total = dat.x + dat.y + dat.z + dat.w;
+
+    scanned[lane] = total;
+    barrier();
+
+    //Inclusive Hillis-Steele scan in shared memory.
+    for (int stride = 1; stride < WORK_SIZE; stride <<= 1) {
+        uint carry = (lane >= uint(stride)) ? scanned[lane - stride] : 0u;
+        barrier();
+        scanned[lane] += carry;
+        barrier();
+    }
+
+    //Exclusive base for this element = inclusive sum minus our own total.
+    uint base = scanned[lane] - total;
+
+    ioCount[lane] = uvec4(base, base + dat.x, base + dat.x + dat.y, base + dat.x + dat.y + dat.z);
+}

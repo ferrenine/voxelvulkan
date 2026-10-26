@@ -1,0 +1,128 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+#ifdef HDR_OUTPUT
+layout(binding = 0, rgba16f) uniform writeonly restrict image2D colourTexOut;
+#else
+layout(binding = 0, rgba8) uniform writeonly restrict image2D colourTexOut;
+#endif
+layout(binding = 1) uniform sampler2D depthTex;
+layout(binding = 2) uniform sampler2D colourTex;
+layout(binding = 3, std140) uniform BlitUniforms {
+    mat4 uUnusedInvProj;
+    mat4 uUnusedProj;
+    vec4 uUnusedEndParams;
+    vec4 uUnusedFogColour;
+    vec4 uBerylLightDir;     // xyz = sun/moon light direction, w = berylActive
+    vec4 uBerylLightColor;   // rgb = LightColor, a = LightIntensity
+    vec4 uBerylAmbientLight; // rgb = AmbientLight, a = LightVisibility
+    vec4 uBerylSkyColor;     // rgba = SkyColor
+    vec4 uBerylParams;       // x = AmbientLightFactor, y = NightMultiplier, z = MinAmbientLight, w = FogFactor
+};
+layout(push_constant) uniform PushConstants {
+    mat4 MVP;
+    mat4 invMVP;
+};
+
+vec3 rev3d(vec3 clip) {
+    vec4 view = invMVP * vec4(clip.x * 2.0 - 1.0, 1.0 - clip.y * 2.0, clip.z, 1.0);
+    return view.xyz / view.w;
+}
+
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031f);
+    p3 += dot(p3, p3.yzx + 33.33f);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Screen-space contact AO. Unlike the old single-point world-space probe this
+// samples a small ring around the pixel, so a large LOD face gets a soft
+// darkening near its edges/contact instead of a hard stamped rectangle.
+float computeScreenSpaceAO(vec2 point, vec3 pos, vec3 normal, float voxelSize,
+                           vec2 texelSize, vec2 size) {
+    // Derive the screen-space size of the LOD cell from the clip-space w
+    // (view depth). The old code used length(worldPos), which is distance from
+    // the world origin, not the camera, so SSAO collapsed to nothing at large
+    // world coordinates. A 1.6-cell world radius is then projected to pixels.
+    float viewDepth = max(abs((MVP * vec4(pos, 1.0f)).w), 0.1f);
+    float pixelsPerBlock = abs(MVP[1][1]) * size.y * 0.5f / viewDepth;
+    // Voxy's normal path uses a fixed ~1.5-block contact radius. Scaling the
+    // radius by the LOD cell size made one cell of AO swallow the whole
+    // 1-block step face and produced wide black bands. Keep the contact
+    // shadow local to the corner.
+    float range = min(voxelSize, 1.0f) * 1.0f;
+    float radiusPixels = clamp(range * pixelsPerBlock, 3.0f, 64.0f);
+    float rotation = hash12(gl_GlobalInvocationID.xy) * 6.28318530718f;
+    float occlusion = 0.0f;
+    const int TAPS = 12;
+    for (int i = 0; i < TAPS; i++) {
+        float angle = rotation + float(i) * 6.28318530718f / float(TAPS);
+        float radius = radiusPixels * (0.35f + 0.65f * sqrt((float(i) + 1.0f) / float(TAPS)));
+        vec2 suv = point + vec2(cos(angle), sin(angle)) * radius * texelSize;
+        if (suv.x <= 0.001f || suv.x >= 0.999f || suv.y <= 0.001f || suv.y >= 0.999f) {
+            continue;
+        }
+        float sd = textureLod(depthTex, suv, 0.0f).r;
+        if (sd <= 0.0f || sd >= 1.0f) {
+            continue;
+        }
+        vec3 sp = rev3d(vec3(suv, sd));
+        vec3 diff = sp - pos;
+        float dist = length(diff);
+        if (dist < 0.05f || dist > range) {
+            continue;
+        }
+        float nd = dot(diff / dist, normal);
+        if (nd <= 0.12f) {
+            continue;
+        }
+        occlusion += (1.0f - nd) * (1.0f - dist / range);
+    }
+    return clamp(occlusion / float(TAPS) * 1.8f, 0.0f, 1.0f);
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(colourTexOut);
+    if (coord.x >= size.x || coord.y >= size.y) {
+        return;
+    }
+    float depth = texelFetch(depthTex, coord, 0).r;
+    if (depth == 0.0f || depth >= 1.0f) {
+        imageStore(colourTexOut, coord, vec4(0.0f));
+        return;
+    }
+    vec4 colour = texelFetch(colourTex, coord, 0);
+    if (colour == vec4(0.0f)) {
+        imageStore(colourTexOut, coord, vec4(0.0f));
+        return;
+    }
+
+    uint metadata = uint(round(colour.w * 255.0f));
+    uint face = metadata & 7u;
+    uint lod = (metadata >> 3) & 7u;
+    bool hasAO = ((metadata >> 6) & 1u) != 0u;
+
+    vec4 ocolour = vec4(colour.rgb, 1.0f);
+
+    //AUDIT-FIXME+PERF: AO is fully disabled — both branches yield 0, so the
+    // 12-tap sampling below is skipped entirely and this pass degenerates to
+    // a colour copy (still needed: it feeds colourSSAOTex to finalBlit/SSR
+    // with alpha normalized). Restore a real non-Beryl strength to re-enable.
+    float aoStrength = (uBerylLightDir.w > 0.5f) ? 0.0f : 0.0f;
+    if (hasAO && aoStrength > 0.0f) {
+        vec2 point = (vec2(coord) + vec2(0.5f)) / vec2(size);
+        vec3 pos = rev3d(vec3(point, depth));
+        float voxelSize = float(1u << lod);
+        vec3 viewNormal = vec3(uint((face >> 1) == 2), uint((face >> 1) == 0), uint((face >> 1) == 1)) * (float(int(face) & 1) * 2.0f - 1.0f);
+        vec2 sizeVec = vec2(size);
+        float d = computeScreenSpaceAO(point, pos, viewNormal, voxelSize,
+                1.0f / sizeVec, sizeVec);
+        if (d < 0.02f) {
+            d = 0.0f;
+        }
+        ocolour.xyz *= clamp(1.0f - d * aoStrength, 0.68f, 1.0f);
+    }
+
+    imageStore(colourTexOut, coord, ocolour);
+}

@@ -1,0 +1,25 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, r32f) uniform readonly restrict image2D srcMip;
+layout(binding = 1, r32f) uniform writeonly restrict image2D dstMip;
+
+layout(push_constant) uniform PushConstants {
+    int dstWidth;
+    int dstHeight;
+};
+
+void main() {
+    ivec2 dstCoord = ivec2(gl_GlobalInvocationID.xy);
+    if (dstCoord.x >= dstWidth || dstCoord.y >= dstHeight) {
+        return;
+    }
+    ivec2 srcCoord = dstCoord * 2;
+    float d0 = imageLoad(srcMip, srcCoord + ivec2(0, 0)).r;
+    float d1 = imageLoad(srcMip, srcCoord + ivec2(1, 0)).r;
+    float d2 = imageLoad(srcMip, srcCoord + ivec2(0, 1)).r;
+    float d3 = imageLoad(srcMip, srcCoord + ivec2(1, 1)).r;
+    float maxD = max(max(d0, d1), max(d2, d3));
+    imageStore(dstMip, dstCoord, vec4(maxD, 0.0, 0.0, 0.0));
+}

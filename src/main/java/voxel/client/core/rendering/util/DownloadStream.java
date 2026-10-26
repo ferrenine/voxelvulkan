@@ -1,0 +1,207 @@
+package voxel.client.core.rendering.util;
+
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+import voxel.client.core.vk.VkBuffer;
+import voxel.client.core.vk.VkFence;
+import voxel.client.core.vk.VkPersistentMappedBuffer;
+import voxel.client.vk.VkVoxel;
+import voxel.common.Logger;
+import voxel.common.util.AllocationArena;
+import voxel.common.util.MemoryBuffer;
+import net.vulkanmod.vulkan.Vulkan;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VkBufferCopy;
+import org.lwjgl.vulkan.VkCommandBuffer;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.function.Consumer;
+
+import static voxel.common.util.AllocationArena.SIZE_LIMIT;
+import static org.lwjgl.vulkan.VK10.*;
+
+/**
+ * Download stream: device buffers are copied into a persistently mapped
+ * host-visible buffer; callbacks fire once the frame that recorded the copy is
+ * known to have completed (frame-based fences).
+ */
+public class DownloadStream {
+    public interface DownloadResultConsumer {
+        void consume(long ptr, long size);
+    }
+
+    private final AllocationArena allocationArena = new AllocationArena();
+    private final VkPersistentMappedBuffer downloadBuffer;
+
+    private final Deque<DownloadFrame> frames = new ArrayDeque<>();
+    private final LongArrayList thisFrameAllocations = new LongArrayList();
+    private final Deque<DownloadData> downloadList = new ArrayDeque<>();
+    private final ArrayList<DownloadData> thisFrameDownloadList = new ArrayList<>();
+
+    public DownloadStream(long size) {
+        this.downloadBuffer = new VkPersistentMappedBuffer(size, 0).name("DownloadStream");
+        this.allocationArena.setLimit(size);
+    }
+
+    private long caddr = -1;
+    private long offset = 0;
+
+    //Pulls the entire buffer from the gpu
+    public void download(VkBuffer buffer, DownloadResultConsumer resultConsumer) {
+        this.download(buffer, 0, buffer.size(), resultConsumer);
+    }
+
+    public void download(VkBuffer buffer, Consumer<MemoryBuffer> resultConsumer) {
+        this.download(buffer, 0, buffer.size(), resultConsumer);
+    }
+
+    public void download(VkBuffer buffer, long downloadOffset, long size, Consumer<MemoryBuffer> consumer) {
+        this.download(buffer, downloadOffset, size, (ptr, size2) -> {
+            consumer.accept(MemoryBuffer.createUntrackedUnfreeableRawFrom(ptr, size));
+        });
+    }
+
+    public void download(VkBuffer buffer, long downloadOffset, long size, DownloadResultConsumer resultConsumer) {
+        if (size > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException();
+        }
+        if (size <= 0) {
+            throw new IllegalArgumentException();
+        }
+        if (downloadOffset + size > buffer.size()) {
+            throw new IllegalArgumentException();
+        }
+
+        long addr;
+        if (this.caddr == -1 || !this.allocationArena.expand(this.caddr, (int) size)) {
+            this.caddr = this.allocationArena.alloc((int) size);//TODO: replace with allocFromLargest
+            if (this.caddr == SIZE_LIMIT) {
+                Logger.warn("Download stream full, preemptively committing, this could cause bad things to happen");
+                this.commit();
+                int attempts = 10;
+                while (--attempts != 0 && this.caddr == SIZE_LIMIT) {
+                    VkVoxel.waitIdle();
+                    this.tick();
+                    this.caddr = this.allocationArena.alloc((int) size);
+                }
+                if (this.caddr == SIZE_LIMIT) {
+                    throw new IllegalStateException("Could not allocate memory segment big enough for upload even after force flush");
+                }
+            }
+            this.thisFrameAllocations.add(this.caddr);
+            this.offset = size;
+            addr = this.caddr;
+        } else {//Could expand the allocation so just update it
+            addr = this.caddr + this.offset;
+            this.offset += size;
+        }
+
+        if (this.caddr + size > this.downloadBuffer.size()) {
+            throw new IllegalStateException();
+        }
+
+        this.downloadList.add(new DownloadData(buffer, addr, downloadOffset, size, resultConsumer));
+
+        //TODO: maybe not auto-commit
+        this.commit();
+    }
+
+
+    public void commit() {
+        if (this.downloadList.isEmpty()) {
+            return;
+        }
+
+        var cb = VkVoxel.commandBufferOrNull();
+        if (cb != null) {
+            VkVoxel.ensureOutsideRenderPass();
+            this.recordCopies(cb);
+        } else {
+            VkVoxel.oneShot(this::recordCopies);
+        }
+
+        this.thisFrameDownloadList.addAll(this.downloadList);
+        this.downloadList.clear();
+
+        this.caddr = -1;
+        this.offset = 0;
+    }
+
+    private void recordCopies(VkCommandBuffer cb) {
+        // Make earlier GPU writes to the source buffers visible to the copies.
+        VkVoxel.memoryBarrier(cb,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_ACCESS_MEMORY_WRITE_BIT,
+                VK_ACCESS_TRANSFER_READ_BIT);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
+            for (var entry : this.downloadList) {
+                region.get(0).srcOffset(entry.targetOffset).dstOffset(entry.downloadStreamOffset).size(entry.size);
+                vkCmdCopyBuffer(cb, entry.target.id, this.downloadBuffer.id, region);
+            }
+        }
+        // Host reads happen later; the destination is host-coherent so no further
+        // barrier is required.
+    }
+
+    public void tick() {
+        this.commit();
+        if (!this.thisFrameAllocations.isEmpty()) {
+            this.frames.add(new DownloadFrame(new VkFence(), new LongArrayList(this.thisFrameAllocations), new ArrayList<>(this.thisFrameDownloadList)));
+            this.thisFrameAllocations.clear();
+            this.thisFrameDownloadList.clear();
+        }
+
+        while (!this.frames.isEmpty()) {
+            //Since the ordering of frames is the ordering of the gl commands if we encounter an unsignaled fence
+            // all the other fences should also be unsignaled
+            if (!this.frames.peek().fence.signaled()) {
+                break;
+            }
+
+            //Release all the allocations from the frame
+            var frame = this.frames.pop();
+
+            //Apply all the callbacks
+            for (var data : frame.data) {
+                data.resultConsumer.consume(this.downloadBuffer.addr() + data.downloadStreamOffset, data.size);
+            }
+
+            frame.allocations.forEach(this.allocationArena::free);
+            frame.fence.free();
+        }
+    }
+
+    //Synchonize force flushes everything
+    public void waitDiscard() {
+        VkVoxel.waitIdle();
+        while (!this.frames.isEmpty()) {
+            var frame = this.frames.pop();
+            frame.allocations.forEach(this.allocationArena::free);
+            frame.fence.free();
+        }
+    }
+
+    public void flushWaitClear() {
+        VkVoxel.waitIdle();
+        this.tick();
+        VkVoxel.waitIdle();
+        this.tick();
+        if (!this.frames.isEmpty()) {
+            throw new IllegalStateException();
+        }
+    }
+
+    private record DownloadFrame(VkFence fence, LongArrayList allocations, ArrayList<DownloadData> data) {
+    }
+
+    private record DownloadData(VkBuffer target, long downloadStreamOffset, long targetOffset, long size,
+                                DownloadResultConsumer resultConsumer) {
+    }
+
+
+    // Global download stream
+    public static final DownloadStream INSTANCE = new DownloadStream(1 << 25);//32 mb download buffer
+}
