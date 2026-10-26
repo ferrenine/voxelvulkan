@@ -71,8 +71,17 @@ void main() {
     }
     #endif
 
+    uint quadIndex = uint(gl_VertexID) >> 2;
+    // Coarse sea-level water is placed at the cell top by the mesher; lower it
+    // onto the real block surface. Non-water quads carry 0 in this pad nibble.
+    uint waterTopOffset = (lightAO[quadIndex].x >> 11) & 0x1Fu;
     QuadData quad;
-    setupQuad(quad, quadData[uint(gl_VertexID)>>2], positionBuffer[gl_BaseInstance], (gl_VertexID&3) == 1);
+    setupQuad(quad, quadData[quadIndex], positionBuffer[gl_BaseInstance], (gl_VertexID&3) == 1);
+    // Lava uses the same pad bytes for its per-corner flow heights; only water
+    // consumes this world-space offset.
+    if (!quad.fluidFlow) {
+        quad.basePoint.y -= float(waterTopOffset);
+    }
 
     #ifdef SHADOW_PASS
     // Every face casts, not only the ones facing the camera.

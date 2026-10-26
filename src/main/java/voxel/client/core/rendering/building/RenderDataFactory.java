@@ -11,6 +11,7 @@ import voxel.common.world.WorldEngine;
 import voxel.common.world.WorldSection;
 import voxel.common.world.Mapper;
 import voxel.commonimpl.VoxelCommon;
+import net.minecraft.client.Minecraft;
 import net.minecraft.world.level.block.state.BlockState;
 import org.lwjgl.system.MemoryUtil;
 
@@ -104,6 +105,10 @@ public class RenderDataFactory {
      * coarser levels store merged voxels, one cell per 2^lvl blocks.
      */
     private int lodLevel = 0;
+    /** World sea level, used to place coarse sea-surface water on the real surface. */
+    private int seaLevel = 63;
+    /** World-space Y origin of the LOD section currently being meshed. */
+    private long meshSectionOriginY;
 
 
 
@@ -179,6 +184,29 @@ public class RenderDataFactory {
             long emitModelMeta = RenderDataFactory.this.modelMan.getModelMetadataFromClientId(modelId);
             boolean lava = ModelQueries.isLava(emitModelMeta);
             boolean lavaFlow = lava && RenderDataFactory.this.lodLevel == 0;
+
+            // A coarse fluid cell reports water because some block inside its
+            // 2^lodLevel volume is water, but its top face is emitted at the
+            // cell top. At sea level that cell top is one block above the real
+            // water surface (the sea-level water block is the lower half of the
+            // cell), which leaves a one-block step/gap against LOD0 water. Drop
+            // the sea-level top face by that one block. Non-sea-level water
+            // keeps the cell top for now; it has no cross-LOD reference plane.
+            boolean waterTop = face == 1 && RenderDataFactory.this.lodLevel > 0 && !lava
+                    && ModelQueries.isFluid(emitModelMeta);
+            int waterTopOffset = 0;
+            if (waterTop) {
+                long cellBottom = RenderDataFactory.this.meshSectionOriginY
+                        + ((long) auxPos << RenderDataFactory.this.lodLevel);
+                long cellTop = cellBottom + (1L << RenderDataFactory.this.lodLevel);
+                // The sea-level surface is the one water plane shared by every
+                // LOD. If this cell is the one containing that surface, lower
+                // the coarse top face from the cell top onto the real plane.
+                if (cellBottom <= RenderDataFactory.this.seaLevel
+                        && RenderDataFactory.this.seaLevel <= cellTop) {
+                    waterTopOffset = (int) (cellTop - RenderDataFactory.this.seaLevel);
+                }
+            }
             // Coarse LOD cells represent a volume of 2^lodLevel blocks, not a
             // single block: their shell faces must be lit by the cell's own
             // (mip-averaged) light instead of the open air in front of the shell.
@@ -329,6 +357,7 @@ public class RenderDataFactory {
                                 }
                             }
                         }
+                        splitLight = applyWaterTopOffset(splitLight, waterTopOffset);
                         long off = qi*8L + bufferIdx*8L*(1<<16);
                         MemoryUtil.memPutLong(RenderDataFactory.this.quadBufferPtr + off, splitQuad);
                         MemoryUtil.memPutLong(RenderDataFactory.this.lightAOBufferPtr + off, splitLight);
@@ -347,6 +376,7 @@ public class RenderDataFactory {
                 if (lava) {
                     lightAO = applyLavaCornerY(lightAO, 0, 0, 0, 0);
                 }
+                lightAO = applyWaterTopOffset(lightAO, waterTopOffset);
 
                 int bufferIdx = type+(type==2?face:0);//Translucent, double side, directional
                 int quadIdx = RenderDataFactory.this.allocQuads(bufferIdx, 1);
@@ -588,6 +618,10 @@ public class RenderDataFactory {
     public RenderDataFactory(WorldEngine world, ModelFactory modelManager, boolean emitMeshlets) {
         this.world = world;
         this.modelMan = modelManager;
+        var level = Minecraft.getInstance().level;
+        if (level != null) {
+            this.seaLevel = level.getSeaLevel();
+        }
     }
 
     private static long getQuadTyping(long metadata) {//2 bits
@@ -940,6 +974,18 @@ public class RenderDataFactory {
         v = (v & ~(0xFFL << 40)) | (((long) (y2 & 0xFF)) << 40);
         v = (v & ~(0xFFL << 56)) | (((long) (y3 & 0xFF)) << 56);
         return v;
+    }
+
+    /**
+     * Coarse sea-surface water sits below the LOD cell top. The vertex shader
+     * reads this 5-bit world-space offset from the unused pad bits of corner 0
+     * (bits 11..15); water never uses the lava-flow bytes.
+     */
+    private static long applyWaterTopOffset(long lightAO, int offset) {
+        if (offset == 0) {
+            return lightAO;
+        }
+        return (lightAO & ~(0x1FL << 11)) | ((long) (offset & 0x1F) << 11);
     }
 
     /**
@@ -2830,6 +2876,7 @@ public class RenderDataFactory {
         // represents 2^lvl blocks, so its shell must be lit by the cell's own
         // (mip-averaged) light instead of the open air in front of it.
         this.lodLevel = section.lvl;
+        this.meshSectionOriginY = (long) section.y << (5 + section.lvl);
         //TODO: FIXME: because of the exceptions that are thrown when aquiring modelId
         // this can result in the state of all block meshes and well _everything_ from being incorrect
         //THE EXCEPTION THAT THIS THROWS CAUSES MAJOR ISSUES
