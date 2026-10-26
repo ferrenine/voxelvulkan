@@ -106,27 +106,25 @@ void setupScreenspace(in UnpackedNode node) {
     vec3 p111 = (P111.xyz/P111.w) * vec3(0.5f, -0.5f, 1.0f) + vec3(0.5f, 0.5f, 0.0f);
 
 
-    {//Compute exact screenspace size
-        float ssize = 0;
-        {//Faces from 0,0,0
-
-            vec2 A = p100.xy-p000.xy;
-            vec2 B = p010.xy-p000.xy;
-            vec2 C = p001.xy-p000.xy;
-            ssize += crossMag(A,B);
-            ssize += crossMag(A,C);
-            ssize += crossMag(C,B);
-        }
-        {//Faces from 1,1,1
-            vec2 A = p011.xy-p111.xy;
-            vec2 B = p101.xy-p111.xy;
-            vec2 C = p110.xy-p111.xy;
-            ssize += crossMag(A,B);
-            ssize += crossMag(A,C);
-            ssize += crossMag(C,B);
-        }
-        ssize *= 0.5f;//Half the size since we did both back and front area
-        screenSize = ssize;
+    {//Compute the screenspace area of the largest visible face.
+        // The old metric summed the projected areas of all three face
+        // orientations. At an oblique angle that is ~1.7x the area of the
+        // largest face, so a 64^3 LOD1 node was split into LOD0 while each
+        // individual face was still only a few dozen pixels across. That
+        // produced sub-pixel LOD0 geometry far beyond the subdivision
+        // distance. Pair the opposite faces (their perspective sizes are
+        // close), average each pair, then use the largest pair. This keeps
+        // the original front-on threshold while delaying oblique splits.
+        vec2 A0 = p100.xy-p000.xy;
+        vec2 B0 = p010.xy-p000.xy;
+        vec2 C0 = p001.xy-p000.xy;
+        vec2 A1 = p011.xy-p111.xy;
+        vec2 B1 = p101.xy-p111.xy;
+        vec2 C1 = p110.xy-p111.xy;
+        float xy = 0.5f * (crossMag(A0, B0) + crossMag(A1, C1));
+        float xz = 0.5f * (crossMag(A0, C0) + crossMag(A1, B1));
+        float yz = 0.5f * (crossMag(C0, B0) + crossMag(C1, B1));
+        screenSize = max(xy, max(xz, yz));
     }
 
     minBB = min(min(min(p000, p100), min(p001, p101)), min(min(p010, p110), min(p011, p111)));

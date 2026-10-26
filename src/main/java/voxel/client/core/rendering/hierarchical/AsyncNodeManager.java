@@ -256,19 +256,26 @@ public class AsyncNodeManager {
         //Limit uploading as well as by geometry capacity being available
         // Match Voxy: keep 50MB free, process up to 300 jobs and at most 1MB
         // of new geometry per sync so uploads are aggressive without one
-        // frame swallowing the whole queue.
+        // frame swallowing the whole queue. Geometry and its per-quad light
+        // buffer are separate copies of the same size, so both count against
+        // the budget. Peek before polling so a job that would overshoot the
+        // budget is left for the next sync instead of being copied in this
+        // one; a single oversized job is still processed to avoid a stall.
         long freeBytes = this.geometryCapacity - this.geometryManager.getGeometryUsedBytes();
         long uploadedBytes = 0;
-        for (int limit = 0; limit < 300
-                && freeBytes > 50_000_000L
-                && uploadedBytes < (1L << 20); limit++) {
+        for (int limit = 0; limit < 300 && freeBytes > 50_000_000L; limit++) {
+            var next = this.geometryUpdateQueue.peek();
+            if (next == null)
+                break;
+            long nextBytes = (next.geometryBuffer != null ? next.geometryBuffer.size : 0)
+                    + (next.lightBuffer != null ? next.lightBuffer.size : 0);
+            if (uploadedBytes > 0 && uploadedBytes + nextBytes > (1L << 20))
+                break;
             var job = this.geometryUpdateQueue.poll();
             if (job == null)
                 break;
             workDone++;
-            if (job.geometryBuffer != null) {
-                uploadedBytes += job.geometryBuffer.size;
-            }
+            uploadedBytes += nextBytes;
             this.manager.processGeometryResult(job);
             freeBytes = this.geometryCapacity - this.geometryManager.getGeometryUsedBytes();
         }

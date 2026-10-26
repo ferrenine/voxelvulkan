@@ -188,13 +188,21 @@ vec3 traceWaterSSR(vec3 worldPos, vec3 R, vec3 skyColor) {
     // far LOD sees the same terrain reflection as the near chunks.
     const int STEPS = 48;
     const float MAX_TRACE_DIST = 1024.0f;
+    // Near water benefits from a denser trace; by the time the water is
+    // hundreds of blocks away the reflection is a slowly varying band and
+    // 8-16 samples are enough. This avoids paying 52 depth samples per water
+    // pixel across an entire ocean view.
+    int steps = waterDist < 128.0f ? 36 : (waterDist < 384.0f ? 16 : 8);
     float prevDist = 0.0f;
     float prevRayZ = startNDC.z;
     vec2 hitUV = vec2(0.0f);
     bool hit = false;
 
     for (int i = 1; i <= STEPS; i++) {
-        float t = float(i) / float(STEPS);
+        if (i > steps) {
+            break;
+        }
+        float t = float(i) / float(steps);
         float dist = 0.35f + MAX_TRACE_DIST * t * t;
         vec4 clip = startClip + clipR * dist;
         if (clip.w <= 0.1f) {
@@ -598,7 +606,8 @@ void main() {
     // tiles once per block like the near field instead of once per LOD cell
     // (which stretched one 16x16 tile over 2^lod blocks and made the far
     // terrain look flat/light against the near terrain).
-    float lodScale = float(1u << ((interData.w >> 3) & 7u));
+    int lodLevel = int((interData.w >> 3) & 7u);
+    float lodScale = float(1u << lodLevel);
     vec2 uvBlocks = uv * lodScale;
     // interData.x stores quadSize-1. The quad spans quadSize * lodScale
     // blocks, so the UV range has to reach the END of the last block, not its
@@ -690,16 +699,25 @@ void main() {
     #endif
     #endif
 
-    //Also, small quad is really fking over the mipping level somehow
+    // Near LODs keep the exact mip-0 alpha test because cutout leaves/grass
+    // need their real holes. Far LODs already use the filtered texture
+    // sample; forcing a second mip-0 fetch there thrashes the atlas cache
+    // across dense canopies for a difference that is below one pixel.
+    float alphaForDiscard;
+    if (lodLevel >= 2) {
+        alphaForDiscard = colour.a;
+    } else {
+        alphaForDiscard = textureLod(blockModelAtlas, texPos, 0).a;
+    }
+
     #ifndef TRANSLUCENT
     colour.a = 1.0f;
-    if (useDiscard() && (textureLod(blockModelAtlas, texPos, 0).a <= 0.1f)) {
-    //if (useDiscard() && (colour.a <= 0.1f)) {
+    if (useDiscard() && alphaForDiscard <= 0.1f) {
     #else
-    if (textureLod(blockModelAtlas, texPos, 0).a == 0.0f) {
+    if (alphaForDiscard == 0.0f) {
     #endif
-        //AUDIT-FIXME: samples the exact pixel (no lod) for discarding — bad for
-        // divergence, but it stops mipmapping from producing wrong alpha.
+        // The far-LOD path above already tested the filtered alpha; the
+        // mip-0 fetch is only kept for LOD0/1.
         #ifndef DEBUG_RENDER
         discard;
         return;

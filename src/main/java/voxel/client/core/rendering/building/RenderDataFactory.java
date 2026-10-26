@@ -297,19 +297,27 @@ public class RenderDataFactory {
             int fallbackLight = (int) ((data >>> 55) & 0xFFL);
             int shiftAmount = axis==0?16:(axis==1?11:21);
 
-            // Greedy merging is based on the block data only. Vertical faces
-            // must carry their own per-block smooth light/AO, otherwise the
-            // merged quad only has values at its two ends and the contact
-            // shadow appears at the run ends instead of on each block. Split
-            // every vertical run unconditionally; horizontal faces keep the
-            // cheaper key-based split. Offset models (grass, flowers, ...) and
-            // slanted faces are placed per block in the vertex shader, so they
-            // also need one quad per block.
+            // Greedy merging is based on the block data only. At LOD0,
+            // vertical faces must carry their own per-block smooth light/AO,
+            // otherwise the merged quad only has values at its two ends and
+            // the contact shadow appears at the run ends instead of on each
+            // block. Split every vertical run unconditionally at LOD0;
+            // horizontal faces keep the cheaper key-based split.
+            //
+            // At coarse LODs the mesher is already operating on cells that
+            // aggregate 2^lodLevel blocks. Carrying one corner sample across
+            // such a face is visually equivalent at that distance and avoids
+            // multiplying the far-field quad count by the merged cell area.
+            // Offset models (grass, flowers, ...) and slanted faces are placed
+            // per block in the vertex shader, so they still need one quad per
+            // cell at every LOD.
             boolean split = lavaFlow;
             if (!lavaFlow && (length > 1 || width > 1)) {
-                if (face > 1 || ModelQueries.needsPerBlockQuads(RenderDataFactory.this.modelMan.getModelMetadataFromClientId(modelId))) {
+                boolean perBlockQuads = ModelQueries.needsPerBlockQuads(
+                        RenderDataFactory.this.modelMan.getModelMetadataFromClientId(modelId));
+                if (perBlockQuads || (RenderDataFactory.this.lodLevel == 0 && face > 1)) {
                     split = true;
-                } else {
+                } else if (RenderDataFactory.this.lodLevel == 0) {
                     long firstKey = RenderDataFactory.this.computeCornerLightAO(
                             x, z, 1, 1, axis, axisSide, auxPos, fallbackLight, volumeLight, leafSelfLight);
                     outer:

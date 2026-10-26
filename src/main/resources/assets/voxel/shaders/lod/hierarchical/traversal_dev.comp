@@ -73,10 +73,42 @@ void enqueueChildren(in UnpackedNode node) {
     }
 
     uint children = getChildCount(node);
-    pushNodesInit(children);
     uint ptr = getChildPtr(node);
-    for (int i = 0; i < children; i++) {
-        pushNode(ptr+i);
+
+    // Emit children nearest-to-camera first. The compact child list is not
+    // ordered by distance, and the render queue inherits this order. Near
+    // geometry then reaches depth testing before the far layers that it can
+    // occlude, improving early-Z rejections within each parent.
+    uint ids[8];
+    float distances[8];
+    for (uint i = 0u; i < children; i++) {
+        uint childId = ptr + i;
+        UnpackedNode child;
+        unpackNode(child, childId);
+        vec3 childBase = vec3(((child.pos << child.lodLevel) - camSecPos) << 5) - camSubSecPos;
+        vec3 childCenter = childBase + vec3(float(16u << child.lodLevel));
+        ids[i] = childId;
+        distances[i] = dot(childCenter, childCenter);
+    }
+
+    // At most eight entries: insertion sort is cheaper than any indirect
+    // setup and avoids adding another GPU pass.
+    for (uint i = 1u; i < children; i++) {
+        uint id = ids[i];
+        float distance = distances[i];
+        int j = int(i) - 1;
+        while (j >= 0 && distances[j] > distance) {
+            ids[j + 1] = ids[j];
+            distances[j + 1] = distances[j];
+            j--;
+        }
+        ids[j + 1] = id;
+        distances[j + 1] = distance;
+    }
+
+    pushNodesInit(children);
+    for (uint i = 0u; i < children; i++) {
+        pushNode(ids[i]);
     }
 }
 
