@@ -52,6 +52,9 @@ public final class VoxelModSettings {
     private static boolean snapEnabled;
     private static boolean snapRendering;
 
+    /** Pages created by the latest settings-screen build, used by Mod Menu to select Voxel. */
+    private static List<OptionPage> lastPages = List.of();
+
     private VoxelModSettings() {
     }
 
@@ -164,7 +167,13 @@ public final class VoxelModSettings {
         }));
 
         takeSnapshot();
+        lastPages = List.copyOf(pages);
         return pages;
+    }
+
+    /** First Voxel page created for the current VulkanMod settings screen. */
+    public static OptionPage firstPage() {
+        return lastPages.isEmpty() ? null : lastPages.get(0);
     }
 
     /**

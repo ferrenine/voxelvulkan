@@ -16,6 +16,9 @@
     ],
     "client": [
       "voxel.client.VoxelClient"
+    ],
+    "modmenu": [
+      "voxel.client.compat.VoxelModMenuIntegration"
     ]
   },
   "mixins": [
@@ -33,6 +36,7 @@
     "vulkanmod": ">=0.6.7"
   },
   "recommends": {
-    "beryl": ">=0.2.0"
+    "beryl": ">=0.2.0",
+    "modmenu": ">=17.0.1"
   }
 }
