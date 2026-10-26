@@ -3,6 +3,8 @@
   "package": "voxel.client.mixin.vulkanmod",
   "compatibilityLevel": "JAVA_21",
   "client": [
+    "MixinVOptionScreen",
+    "VOptionScreenAccess",
     "MixinVkDeviceManager",
     "MixinVkImageBuilder",
     "MixinVkMemoryManager",

@@ -9,6 +9,7 @@
     "minecraft.MixinClientCommonPacketListenerImpl",
     "minecraft.MixinClientLevel",
     "minecraft.MixinClientPacketListener",
+    "minecraft.MixinContainerEventHandler",
     "minecraft.MixinDebugScreenOverlay",
     "minecraft.MixinLayerLightSectionStorage",
     "minecraft.MixinLevelRenderer",
