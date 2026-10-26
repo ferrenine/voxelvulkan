@@ -17,6 +17,7 @@ layout(binding = 0, std140) uniform SceneUniform {
     float uNoShadeFaceTint;  // getShade(UP, false)
     vec4 uFaceShade;         // getShade(face, true): x = up, y = down, z = north/south, w = east/west
     float uDebugShadow;      // 1 = show the shadow factor on the terrain (debug)
+    vec4 uBerylFogColor;     // Beryl's live fog colour (already gamma-decoded, like uBerylSkyColor)
 };
 
 #ifdef SHADOW_PASS
@@ -55,7 +56,7 @@ layout(binding = BLOCK_MODEL_TEXTURE_BINDING) uniform sampler2D blockModelAtlas;
 
 
 //AUDIT-NOTE: the std140 field order above is hand-aligned to the bare-writes
-// in MDICSectionRenderer.uploadUniformBuffer (offsets 176/240/256/268/288) —
+// in MDICSectionRenderer.uploadUniformBuffer (offsets 176/240/256/268/288/304) —
 // reordering a field silently corrupts data; update both sides together.
 #ifdef QUAD_BUFFER_BINDING
 #ifndef Quad

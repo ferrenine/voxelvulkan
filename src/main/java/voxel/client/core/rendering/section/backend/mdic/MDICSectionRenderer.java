@@ -242,6 +242,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         MemoryUtil.memPutFloat(base + 284, level != null ? level.getShade(Direction.EAST, true) : 0.6f);
         // Debug: paint the shadow factor on the terrain (create "shadowdebug.flag" in the working dir)
         MemoryUtil.memPutFloat(base + 288, checkShadowDebugFlag() ? 1.0f : 0.0f);
+        // std140 places this vec4 after the scalar above: 292 -> padded to 304.
+        BerylUtil.writeBerylFogColor(base + 304);
 
         UploadStream.INSTANCE.commit();
     }

@@ -4,6 +4,7 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.framebuffer.Framebuffer;
 import net.vulkanmod.vulkan.texture.VulkanImage;
 import net.vulkanmod.vulkan.util.MappedBuffer;
@@ -365,6 +366,36 @@ public class BerylUtil {
             MemoryUtil.memPutFloat(ptr + 76, fogFactor);
         } catch (Throwable t) {
             MemoryUtil.memSet(ptr, 0, 80);
+        }
+    }
+
+    /**
+     * Writes Beryl's live shader fog colour (16 bytes) to {@code ptr}.
+     *
+     * <p>Beryl writes the fog colour through {@link VRenderSystem#setShaderFogColor},
+     * so this is the exact value its own {@code FogColor} uniform receives, including
+     * the gamma decode performed by VulkanMod while Beryl's HDR pipeline is active.
+     * Reconstructing it from the night/rain factors in the shader used the encoded
+     * values as if they were linear, which made night water reflect a grey fog and
+     * turn white at grazing angles.</p>
+     */
+    public static void writeBerylFogColor(long ptr) {
+        if (!berylShaderEnabled()) {
+            MemoryUtil.memSet(ptr, 0, 16);
+            return;
+        }
+        try {
+            MappedBuffer fog = VRenderSystem.getShaderFogColor();
+            float r = fog != null ? fog.getFloat(0) : 0.0f;
+            float g = fog != null ? fog.getFloat(4) : 0.0f;
+            float b = fog != null ? fog.getFloat(8) : 0.0f;
+            float a = fog != null ? fog.getFloat(12) : 1.0f;
+            MemoryUtil.memPutFloat(ptr + 0, r);
+            MemoryUtil.memPutFloat(ptr + 4, g);
+            MemoryUtil.memPutFloat(ptr + 8, b);
+            MemoryUtil.memPutFloat(ptr + 12, a);
+        } catch (Throwable t) {
+            MemoryUtil.memSet(ptr, 0, 16);
         }
     }
 

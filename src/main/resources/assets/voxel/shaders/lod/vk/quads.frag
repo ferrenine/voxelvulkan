@@ -138,9 +138,11 @@ void voxel_emitFragment(VoxelFragmentParameters parameters);
 
 vec3 berylWaterSkyColor(float RdotL, float RdotUp, float SoUp) {
     float f1 = 1.0f - 0.25f / (40.0f * RdotUp * RdotUp + 0.25f);
-    float fogColorM = ((1.0f - uBerylParams.y) * 0.8f + 0.2f) * (0.3f * uBerylAmbientLight.w + 0.7f);
-    vec3 fogBase = vec3(0.8f, 0.9f, 0.9f) * fogColorM;
-    vec3 col = mix(fogBase, uBerylSkyColor.rgb, f1);
+    // Beryl's exact FogColor. Reconstructing it from NightFactor gave the
+    // encoded colour, not the gamma-decoded value VulkanMod uploads under the
+    // HDR pipeline; at night that was ~7x too bright and turned grazing water
+    // into a white sheet.
+    vec3 col = mix(uBerylFogColor.rgb, uBerylSkyColor.rgb, f1);
 
     float m1 = min((1.0f - SoUp) * 1.15f, 1.0f);
     m1 = m1 * m1;
