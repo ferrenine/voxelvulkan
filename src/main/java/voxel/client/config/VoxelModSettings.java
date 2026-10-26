@@ -20,8 +20,10 @@ import voxel.common.Logger;
 import voxel.commonimpl.VoxelCommon;
 import voxel.commonimpl.VoxelInstance;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -55,8 +57,9 @@ public final class VoxelModSettings {
 
     public static void register() {
         try {
+            boolean notEnoughVulkanVersion = registerWithNotEnoughVulkan();
             ModSettingsEntry entry = new ModSettingsEntry(
-                    settingsTitle(),
+                    settingsTitle(notEnoughVulkanVersion),
                     () -> Identifier.fromNamespaceAndPath("voxel", "icon.png"),
                     VoxelModSettings::pages,
                     VoxelModSettings::apply);
@@ -68,11 +71,41 @@ public final class VoxelModSettings {
         }
     }
 
-    /** "Voxel 1.1.0-alpha" in the VulkanMod settings sidebar. */
-    private static Component settingsTitle() {
+    /**
+     * Not Enough Vulkan replaces VulkanMod's single-line mod label with a
+     * scrolling name plus a version line, but only for mods listed in its
+     * hard-coded registry. Add Voxel there so the settings entry matches the
+     * native VulkanMod/Beryl layout. Guarded: NEV is optional and its registry
+     * is an implementation detail, so failure falls back to a one-line title.
+     */
+    @SuppressWarnings("unchecked")
+    private static boolean registerWithNotEnoughVulkan() {
+        if (!FabricLoader.getInstance().isModLoaded("not-enough-vulkan")) {
+            return false;
+        }
+        try {
+            Class<?> registry = Class.forName(
+                    "io.github.amiralimollaei.mods.notenoughvulkan.client.ModNameVersionRegistry");
+            Field field = registry.getField("modNameToId");
+            Object value = field.get(null);
+            if (value instanceof Map<?, ?> map) {
+                ((Map<String, String>) map).put("Voxel", "voxel");
+                return true;
+            }
+        } catch (Throwable ignored) {
+            // Keep the fallback title if NEV changes or is not actually active.
+        }
+        return false;
+    }
+
+    /** Versioned settings title; NEV supplies the second line when present. */
+    private static Component settingsTitle(boolean notEnoughVulkanVersion) {
         String version = FabricLoader.getInstance().getModContainer("voxel")
                 .map(container -> container.getMetadata().getVersion().getFriendlyString())
                 .orElse("1.1.0-alpha");
+        if (notEnoughVulkanVersion) {
+            return Component.literal("Voxel").withStyle(ChatFormatting.AQUA);
+        }
         return Component.literal("Voxel ").withStyle(ChatFormatting.AQUA)
                 .append(Component.literal(version).withStyle(ChatFormatting.GRAY));
     }
