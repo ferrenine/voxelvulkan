@@ -1,13 +1,11 @@
 package voxel.client;
 
-import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import voxel.client.core.IGetVoxelRenderSystem;
-import voxel.client.pregen.WorldPregenerator;
 import voxel.commonimpl.VoxelCommon;
 import voxel.commonimpl.WorldIdentifier;
 import voxel.commonimpl.importers.DHImporter;
@@ -56,17 +54,10 @@ public class VoxelCommands {
                             .executes(VoxelCommands::importDistantHorizons)));
         }
 
-        var pregen = ClientCommandManager.literal("pregen")
-                .then(ClientCommandManager.argument("radius_chunks", IntegerArgumentType.integer(1, 256))
-                        .executes(VoxelCommands::startPregen))
-                .then(ClientCommandManager.literal("cancel")
-                        .executes(VoxelCommands::cancelPregen));
-
         return ClientCommandManager.literal("vx")
                 .then(ClientCommandManager.literal("reload")
                         .executes(VoxelCommands::reloadInstance))
-                .then(imports)
-                .then(pregen);
+                .then(imports);
     }
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> registerFull() {
@@ -91,31 +82,7 @@ public class VoxelCommands {
                                         .then(ClientCommandManager.argument("innerPath", StringArgumentType.string())
                                                  .executes(VoxelCommands::importZip))))
                         .then(ClientCommandManager.literal("cancel")
-                                .executes(VoxelCommands::cancelImport)))
-                .then(ClientCommandManager.literal("pregen")
-                        .then(ClientCommandManager.argument("radius_chunks", IntegerArgumentType.integer(1, 256))
-                                .executes(VoxelCommands::startPregen))
-                        .then(ClientCommandManager.literal("cancel")
-                                .executes(VoxelCommands::cancelPregen)));
-    }
-
-    private static int startPregen(CommandContext<FabricClientCommandSource> ctx) {
-        int radius = IntegerArgumentType.getInteger(ctx, "radius_chunks");
-        if (WorldPregenerator.getInstance().startPregen(radius)) {
-            return 0;
-        } else {
-            ctx.getSource().sendError(Component.literal("[Voxel Pregen] Could not start pre-generation (already running or not in world)."));
-            return 1;
-        }
-    }
-
-    private static int cancelPregen(CommandContext<FabricClientCommandSource> ctx) {
-        if (WorldPregenerator.getInstance().cancelPregen()) {
-            return 0;
-        } else {
-            ctx.getSource().sendError(Component.literal("[Voxel Pregen] No pre-generation task is currently running."));
-            return 1;
-        }
+                                .executes(VoxelCommands::cancelImport)));
     }
 
     public static int reloadInstanceDirect() {

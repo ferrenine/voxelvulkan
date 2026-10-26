@@ -161,8 +161,13 @@ public class ModelBakerySubsystem {
         this.factory.addBiome(biomeEntry);
     }
 
+    public String getDebugSummary() {
+        return String.format("MQ/IF/MC: %04d, %03d, %04d",
+                this.blockIdCount.get(), this.factory.getInflightCount(), this.factory.getBakedCount());
+    }
+
     public void addDebugData(List<String> debug) {
-        debug.add(String.format("MQ/IF/MC: %04d, %03d, %04d", this.blockIdCount.get(), this.factory.getInflightCount(), this.factory.getBakedCount()));
+        debug.add(this.getDebugSummary());
     }
 
     public ModelStore getStore() {

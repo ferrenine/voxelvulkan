@@ -4,7 +4,6 @@ import com.google.gson.FieldNamingPolicy;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import voxel.common.Logger;
-import voxel.common.util.cpu.CpuLayout;
 import voxel.commonimpl.VoxelCommon;
 import net.fabricmc.loader.api.FabricLoader;
 
@@ -23,11 +22,31 @@ public class VoxelConfig {
 
     public static VoxelConfig CONFIG = loadOrCreate();
 
+    /**
+     * Conservative worker count for a machine of this size. The LOD service
+     * competes with the render thread, Beryl, and vanilla chunk meshing, so
+     * use a quarter of the logical CPUs for the LOD pool and leave the rest
+     * for the engine.
+     */
+    public static int recommendedWorkerThreads() {
+        int logical = Runtime.getRuntime().availableProcessors();
+        if (logical <= 2) {
+            return 1;
+        }
+        return Math.max(2, Math.min(12, logical / 4));
+    }
+
+    /** Upper bound exposed by the settings slider. */
+    public static int maxWorkerThreads() {
+        int logical = Runtime.getRuntime().availableProcessors();
+        return Math.max(recommendedWorkerThreads(), Math.min(12, Math.max(1, logical / 2)));
+    }
+
     public boolean enabled = true;
     public boolean enableRendering = true;
     public boolean ingestEnabled = true;
     public int sectionRenderDistance = 16;
-    public int serviceThreads = (int) Math.max(CpuLayout.getCoreCount() / 1.5, 1);
+    public int serviceThreads = recommendedWorkerThreads();
     // Minimum on-screen size (pixels) a node must have before the traversal
     // subdivides it. Larger = coarser far LOD and fewer quads. At 1600p / 70掳
     // FOV the default 64 gives roughly: LOD 0 to 1.1 km, LOD 1 to 2.3 km,
@@ -40,15 +59,6 @@ public class VoxelConfig {
     // the final blit. 1.0 = native; 0.75 keeps 56% of the pixels.
     public float lodRenderScale = 0.75f;
 
-    // Temporal catch-up pass: the main opaque pass uses the previous frame's
-    // command buffer, then this pass also draws sections that became visible
-    // this frame. Turning toward a large generated area otherwise draws both
-    // views in one frame. Disable to measure/remove that extra draw.
-    public boolean enableTemporalCatchup = true;
-    // Upper bound on temporal indirect draws per frame (0 = only the built-in
-    // 100k safety limit, no extra cap).
-    public int temporalCatchupMaxDraws = 20000;
-
     public boolean useEnvironmentalFog = true;
     //AUDIT-DEAD: never read 鈥?Sodium is not present on this build.
     public boolean dontUseSodiumBuilderThreads = false;
@@ -57,14 +67,6 @@ public class VoxelConfig {
     // Higher values = more overlap, prevents pop-in at chunk boundaries when flying
     // Range: 0-4 blocks, default 1 (standard overlap behavior)
     public int lodBoundaryBuffer = 1;
-
-    // World curvature: simulates standing on a spherical planet
-    // 0 = disabled (flat world)
-    // 1 = real Earth curvature (6371km radius)
-    // Higher values = more extreme curvature (smaller planet effect)
-    // Range: 0, or 50-5000 (values 1-49 are invalid and auto-corrected to 50)
-    // Inspired by Distant Horizons' earth curvature feature
-    public int earthCurveRatio = 0;
 
     // Per-buffer geometry VRAM size in MB (0 = Auto detection based on GPU VRAM,
     // e.g. 512, 768, 1024, 1536). A second light/AO buffer of the same size is
@@ -79,11 +81,6 @@ public class VoxelConfig {
     // This is a compatibility feature (far trees/hills shadow far terrain), not a
     // performance optimisation; it costs one extra LOD draw into the shadow pass.
     public boolean enableDistantShaderShadows = true;
-
-    // World Pre-generation settings
-    public boolean autoPregenOnJoin = false;
-    public int autoPregenRadius = 32;
-    public int autoPregenThreads = 2;
 
     // Debug settings
     public boolean renderStatistics = false;
@@ -137,8 +134,15 @@ public class VoxelConfig {
         }
         this.subDivisionSize = Math.clamp(this.subDivisionSize, 32.0f, 256.0f);
         this.lodRenderScale = Math.clamp(this.lodRenderScale, 0.5f, 1.0f);
-        if (this.temporalCatchupMaxDraws < 0) {
-            this.temporalCatchupMaxDraws = 0;
+        // Older builds allowed up to availableProcessors()/1.5 workers. Clamp
+        // stale configs to the conservative budget shown by the UI.
+        int maxWorkers = maxWorkerThreads();
+        if (this.serviceThreads < 1) {
+            this.serviceThreads = recommendedWorkerThreads();
+        } else if (this.serviceThreads > maxWorkers) {
+            Logger.warn("service_threads=" + this.serviceThreads + " exceeds the supported maximum ("
+                    + maxWorkers + "); clamping.");
+            this.serviceThreads = maxWorkers;
         }
     }
 

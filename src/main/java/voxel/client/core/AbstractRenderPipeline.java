@@ -99,12 +99,9 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
         if (occlusionDebug<=1) {
             rs.buildDrawCalls(viewport);
         }
-        GPUTiming.INSTANCE.marker("temporal"); // traversal + cmdgen ended
+        GPUTiming.INSTANCE.marker("cmdgen"); // traversal + cmdgen ended
 
-        if (VoxelConfig.CONFIG.enableTemporalCatchup) {
-            rs.renderTemporal(viewport);
-        }
-        GPUTiming.INSTANCE.marker("ssao"); // temporal catch-up ended
+        GPUTiming.INSTANCE.marker("ssao"); // SSAO / depth copy ended
 
         this.postOpaquePreTranslucent(viewport);
         GPUTiming.INSTANCE.marker("translucent"); // SSAO / depth copy ended

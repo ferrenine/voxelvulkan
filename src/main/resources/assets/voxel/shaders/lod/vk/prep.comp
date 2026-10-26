@@ -18,5 +18,4 @@ void main() {
 
     opaqueDrawCount = 0;
     translucentDrawCount = 0;
-    temporalOpaqueDrawCount = 0;
 }

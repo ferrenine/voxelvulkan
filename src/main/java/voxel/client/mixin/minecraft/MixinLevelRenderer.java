@@ -57,7 +57,6 @@ public abstract class MixinLevelRenderer implements IGetVoxelRenderSystem {
 
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void voxel$captureSetWorld(ClientLevel world, CallbackInfo ci) {
-        voxel.client.pregen.WorldPregenerator.getInstance().cancelPregen();
         if (this.level != world) {
             this.shutdownRenderer();
         }
@@ -72,7 +71,6 @@ public abstract class MixinLevelRenderer implements IGetVoxelRenderSystem {
 
     @Inject(method = "close", at = @At("HEAD"))
     private void injectClose(CallbackInfo ci) {
-        voxel.client.pregen.WorldPregenerator.getInstance().cancelPregen();
         this.shutdownRenderer();
     }
 

@@ -517,7 +517,7 @@ public class VoxelRenderSystem {
                 this.lastStatsDump = now;
                 try {
                     var lines = new java.util.ArrayList<String>();
-                    this.addDebugInfo(lines);
+                    this.addDetailedDebugInfo(lines);
                     Logger.info("[RenderStats] " + String.join(" | ", lines));
                 } catch (Throwable t) {
                     Logger.error("RenderStats dump failed", t);
@@ -584,25 +584,49 @@ public class VoxelRenderSystem {
         return this.viewportSelector.getViewport();
     }
 
+    /** Compact LOD block for the F3 screen (kept short so it never runs off-screen). */
     public void addDebugInfo(List<String> debug) {
-        debug.add("SDS: " + VoxelConfig.CONFIG.subDivisionSize
-                + " RS: " + VoxelConfig.CONFIG.lodRenderScale
-                + " TC: " + VoxelConfig.CONFIG.enableTemporalCatchup);
-        debug.add("Buf/Tex [#/Mb]: [" + VkBuffer.getCount() + "/" + (VkBuffer.getTotalSize()/1_000_000) + "],[" + VkTexture.getCount() + "/" + (VkTexture.getEstimatedTotalSize()/1_000_000)+"]");
-        debug.add("Quad overflow (dropped): " + RenderDataFactory.getQuadOverflowTotal());
-        {
-            this.modelService.addDebugData(debug);
-            this.renderGen.addDebugData(debug);
-            this.nodeManager.addDebug(debug);
-            this.pipeline.addDebug(debug);
+        this.addDebugInfo(debug, false);
+    }
+
+    /** Full diagnostics for the periodic log dump; the F3 screen uses the summary. */
+    public void addDetailedDebugInfo(List<String> debug) {
+        this.addDebugInfo(debug, true);
+    }
+
+    private void addDebugInfo(List<String> debug, boolean detailed) {
+        String pipeline = this.isBerylPipeline() ? "Beryl" : "Normal";
+        long usedGeometryMb = this.nodeManager.getUsedGeometryCapacity() >> 20;
+        long geometryCapMb = this.nodeManager.getGeometryCapacity() >> 20;
+        debug.add("LOD [" + pipeline + "]: SDS " + VoxelConfig.CONFIG.subDivisionSize
+                + " | RS " + VoxelConfig.CONFIG.lodRenderScale
+                + " | UC/GC " + usedGeometryMb + "/" + geometryCapMb + " MB");
+
+        TimingStatistics.update();
+        debug.add(String.format("LOD frame: main %.2f ms | dyn %.2f | post %.2f",
+                TimingStatistics.main.getRolling(),
+                TimingStatistics.dynamic.getRolling(),
+                TimingStatistics.postDynamic.getRolling()));
+
+        debug.add("LOD mem: buf " + VkBuffer.getCount() + "/" + (VkBuffer.getTotalSize() / 1_000_000)
+                + " MB | tex " + VkTexture.getCount() + "/" + (VkTexture.getEstimatedTotalSize() / 1_000_000)
+                + " MB | overflow " + RenderDataFactory.getQuadOverflowTotal());
+
+        debug.add("LOD work: RSSQ/TFC " + this.renderGen.getTaskCount()
+                + "/" + RenderGenerationService.MESH_FAILED_COUNTER.get()
+                + " | " + this.modelService.getDebugSummary());
+
+        if (VoxelConfig.CONFIG.gpuTiming) {
+            debug.add(GPUTiming.INSTANCE.getDebug());
         }
-        {
-            TimingStatistics.update();
-            debug.add("Voxel frame runtime (millis): " + TimingStatistics.dynamic.pVal() + ", " + TimingStatistics.main.pVal()+ ", " + TimingStatistics.postDynamic.pVal()+ ", " + TimingStatistics.all.pVal());
-            debug.add("Extra time: " + TimingStatistics.A.pVal() + ", " + TimingStatistics.B.pVal() + ", " + TimingStatistics.C.pVal() + ", " + TimingStatistics.D.pVal());
-            debug.add("Extra 2 time: setup=" + TimingStatistics.E.pVal() + ", traverse=" + TimingStatistics.F.pVal() + ", opaque=" + TimingStatistics.G.pVal() + ", model=" + TimingStatistics.H.pVal() + ", blit=" + TimingStatistics.I.pVal());
+        if (detailed) {
+            RenderStatistics.addDebug(debug);
+            debug.add("Extra time: " + TimingStatistics.A.pVal() + ", " + TimingStatistics.B.pVal()
+                    + ", " + TimingStatistics.C.pVal() + ", " + TimingStatistics.D.pVal());
+            debug.add("Extra 2 time: setup=" + TimingStatistics.E.pVal() + ", traverse=" + TimingStatistics.F.pVal()
+                    + ", opaque=" + TimingStatistics.G.pVal() + ", model=" + TimingStatistics.H.pVal()
+                    + ", blit=" + TimingStatistics.I.pVal());
         }
-        debug.add(GPUTiming.INSTANCE.getDebug());
         PrintfDebugUtil.addToOut(debug);
     }
 

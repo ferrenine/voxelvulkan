@@ -40,11 +40,8 @@ public class VoxelClientInstance extends VoxelInstance {
 
     @Override
     public void updateDedicatedThreads() {
-        int target = VoxelConfig.CONFIG.serviceThreads;
-        // Voxy uses coreCount/1.5 for the service pool; the old /3 cap kept the
-        // default at 6 even on a 32-thread CPU and made old-area streaming slower.
-        int maxRecommended = Math.max(2, (int) (Runtime.getRuntime().availableProcessors() / 1.5));
-        this.setNumThreads(Math.min(target, maxRecommended));
+        int target = Math.max(1, Math.min(VoxelConfig.CONFIG.serviceThreads, VoxelConfig.maxWorkerThreads()));
+        this.setNumThreads(target);
     }
 
     @Override

@@ -1,5 +1,6 @@
 package voxel.client.config;
 
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
@@ -38,8 +39,6 @@ import java.util.function.Supplier;
  */
 public final class VoxelModSettings {
 
-    private static final int MAX_THREADS = Math.max(2, (int) (Runtime.getRuntime().availableProcessors() / 1.5));
-
     // Options whose effect is baked into shader defines or allocations at renderer
     // creation time. Apply compares against this snapshot and reloads the renderer
     // when one of them changed, so every control in the screen actually takes effect.
@@ -57,7 +56,7 @@ public final class VoxelModSettings {
     public static void register() {
         try {
             ModSettingsEntry entry = new ModSettingsEntry(
-                    Component.literal("Voxel").withStyle(ChatFormatting.AQUA),
+                    settingsTitle(),
                     () -> Identifier.fromNamespaceAndPath("voxel", "icon.png"),
                     VoxelModSettings::pages,
                     VoxelModSettings::apply);
@@ -69,25 +68,34 @@ public final class VoxelModSettings {
         }
     }
 
+    /** "Voxel 1.1.0-alpha" in the VulkanMod settings sidebar. */
+    private static Component settingsTitle() {
+        String version = FabricLoader.getInstance().getModContainer("voxel")
+                .map(container -> container.getMetadata().getVersion().getFriendlyString())
+                .orElse("1.1.0-alpha");
+        return Component.literal("Voxel ").withStyle(ChatFormatting.AQUA)
+                .append(Component.literal(version).withStyle(ChatFormatting.GRAY));
+    }
+
     private static List<OptionPage> pages() {
         VoxelConfig cfg = VoxelConfig.CONFIG;
         List<OptionPage> pages = new ArrayList<>();
+
+        int recommendedThreads = VoxelConfig.recommendedWorkerThreads();
+        int logicalThreads = Runtime.getRuntime().availableProcessors();
+        int maxThreads = VoxelConfig.maxWorkerThreads();
+        RangeOption workerThreads = range("voxel.option.worker_threads", 1, maxThreads, 1,
+                v -> cfg.serviceThreads = v, () -> cfg.serviceThreads);
+        workerThreads.setImpact(PerformanceImpact.MEDIUM);
+        workerThreads.setTooltip(v -> Component.translatable("voxel.option.worker_threads.tooltip",
+                recommendedThreads, logicalThreads, maxThreads));
 
         pages.add(new OptionPage(tr("voxel.page.engine"), new OptionBlock[]{
                 block("voxel.block.core",
                         toggle("voxel.option.enabled", v -> cfg.enabled = v, () -> cfg.enabled),
                         toggle("voxel.option.rendering", v -> cfg.enableRendering = v, () -> cfg.enableRendering),
                         toggle("voxel.option.world_sampling", v -> cfg.ingestEnabled = v, () -> cfg.ingestEnabled)),
-                block("voxel.block.threads",
-                        range("voxel.option.worker_threads", 1, MAX_THREADS, 1,
-                                v -> cfg.serviceThreads = v, () -> cfg.serviceThreads)
-                                .setImpact(PerformanceImpact.MEDIUM)),
-                block("voxel.block.pregen",
-                        toggle("voxel.option.auto_pregen", v -> cfg.autoPregenOnJoin = v, () -> cfg.autoPregenOnJoin),
-                        range("voxel.option.auto_pregen_radius", 16, 128, 8,
-                                v -> cfg.autoPregenRadius = v, () -> cfg.autoPregenRadius),
-                        range("voxel.option.auto_pregen_threads", 1, 16, 1,
-                                v -> cfg.autoPregenThreads = v, () -> cfg.autoPregenThreads)),
+                block("voxel.block.threads", workerThreads),
                 block("voxel.block.diagnostics",
                         toggle("voxel.option.f3_diagnostics", v -> cfg.renderStatistics = v, () -> cfg.renderStatistics),
                         toggle("voxel.option.gpu_timing", v -> cfg.gpuTiming = v, () -> cfg.gpuTiming))
@@ -112,14 +120,7 @@ public final class VoxelModSettings {
                         range("voxel.option.vram_budget", 0, 4096, 256,
                                 v -> Component.literal(v == 0 ? "Auto" : v + " MB/buffer (" + (v * 2) + " MB total)"),
                                 v -> cfg.geometryBufferSizeMB = v, () -> cfg.geometryBufferSizeMB)
-                                .setImpact(PerformanceImpact.MEDIUM)),
-                block("voxel.block.world_shape",
-                        range("voxel.option.planetary_curvature", 0, 1000, 10,
-                                v -> cfg.earthCurveRatio = v, () -> cfg.earthCurveRatio)),
-                block("voxel.block.temporal",
-                        toggle("voxel.option.temporal_catchup", v -> cfg.enableTemporalCatchup = v, () -> cfg.enableTemporalCatchup),
-                        range("voxel.option.temporal_draws", 1000, 50000, 1000,
-                                v -> cfg.temporalCatchupMaxDraws = v, () -> cfg.temporalCatchupMaxDraws))
+                                .setImpact(PerformanceImpact.MEDIUM))
         }));
 
         pages.add(new OptionPage(tr("voxel.page.atmosphere"), new OptionBlock[]{

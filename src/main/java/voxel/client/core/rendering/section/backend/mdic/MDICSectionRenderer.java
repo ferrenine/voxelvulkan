@@ -59,11 +59,9 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
     private static final int CMDGEN_WORKGROUP_SIZE = 64;
     private static final int TRANSLUCENT_OFFSET = 400_000;//in draw calls
-    private static final int TEMPORAL_OFFSET = 500_000;//in draw calls
     /** Command-region capacities inside MDICViewport.drawCallBuffer. */
     public static final int OPAQUE_CAPACITY = TRANSLUCENT_OFFSET;
-    public static final int TRANSLUCENT_CAPACITY = TEMPORAL_OFFSET - TRANSLUCENT_OFFSET;
-    public static final int TEMPORAL_CAPACITY = 100_000;
+    public static final int TRANSLUCENT_CAPACITY = 100_000;
     /** Translucent-section id slots in distanceCountBuffer (one id per section). */
     public static final int TRANSLUCENT_ID_CAPACITY = 100_000;
     private static final int STATISTICS_BUFFER_BINDING = 8;
@@ -97,8 +95,6 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     private final AutoBindingShader commandGenShader = Shader.makeAuto()
             .define("CMDGEN_WORKGROUP_SIZE", CMDGEN_WORKGROUP_SIZE)
             .define("TRANSLUCENT_WRITE_BASE", 1024)
-            .define("TEMPORAL_OFFSET", TEMPORAL_OFFSET)
-            .define("TEMPORAL_CAPACITY", TEMPORAL_CAPACITY)
             .define("OPAQUE_CAPACITY", OPAQUE_CAPACITY)
             .define("TRANSLUCENT_ID_CAPACITY", TRANSLUCENT_ID_CAPACITY)
 
@@ -212,14 +208,9 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         }
         MemoryUtil.memPutInt(ptr, viewport.frameId&0x7fffffff); ptr += 4;
         viewport.innerTranslation.getToAddress(ptr); ptr += 4*3;
-
-        // Earth curvature radius: 0 = disabled, otherwise compute radius in blocks
-        int earthCurveRatio = VoxelConfig.CONFIG.earthCurveRatio;
-        float earthRadius = 0.0f;
-        if (earthCurveRatio >= 50) {
-            earthRadius = 6371000.0f / earthCurveRatio;
-        }
-        MemoryUtil.memPutFloat(ptr, earthRadius); ptr += 4;
+        // std140 padding where the removed curvature scalar used to live;
+        // uBerylLightDir still starts at offset 96.
+        ptr += 4;
 
         voxel.client.core.util.BerylUtil.writeBerylUniforms(ptr);
 
@@ -438,20 +429,6 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
         //Beryl keeps drawing (entities) in this pass with VulkanMod's cached pipeline state
         VkVoxel.invalidateExternalPipelineCache();
-    }
-
-    @Override
-    public void renderTemporal(MDICViewport viewport) {
-        if (!VoxelConfig.CONFIG.enableTemporalCatchup) return;
-        if (this.geometryManager.getSectionCount() == 0) return;
-        int maxDraws = Math.min(this.geometryManager.getSectionCount(), TEMPORAL_CAPACITY);
-        int cap = VoxelConfig.CONFIG.temporalCatchupMaxDraws;
-        if (cap > 0) {
-            maxDraws = Math.min(maxDraws, cap);
-        }
-        if (maxDraws <= 0) return;
-        //Render temporal
-        this.renderTerrain(viewport, TEMPORAL_OFFSET*5L*4, 4*5, maxDraws);
     }
 
     @Override

@@ -1,7 +1,6 @@
 package voxel.client.mixin.minecraft;
 
 import voxel.client.VoxelClientInstance;
-import voxel.client.pregen.WorldPregenerator;
 import voxel.commonimpl.VoxelCommon;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
@@ -14,7 +13,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class MixinMinecraft {
     @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V", at = @At("HEAD"))
     private void voxel$injectWorldClose(Screen screen, boolean keepResourcePacks, boolean stopSound, CallbackInfo ci) {
-        WorldPregenerator.getInstance().cancelPregen();
         Minecraft mc = Minecraft.getInstance();
         if (mc.level != null && voxel.client.config.VoxelConfig.CONFIG.ingestEnabled) {
             var chunkSource = mc.level.getChunkSource();

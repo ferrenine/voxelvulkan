@@ -7,11 +7,8 @@
 
   "voxel.block.core": "核心",
   "voxel.block.threads": "线程",
-  "voxel.block.pregen": "预生成",
   "voxel.block.diagnostics": "诊断",
   "voxel.block.geometry": "几何",
-  "voxel.block.world_shape": "世界形状",
-  "voxel.block.temporal": "时域",
   "voxel.block.shading": "着色",
 
   "voxel.option.enabled": "引擎总开关",
@@ -24,19 +21,10 @@
   "voxel.option.world_sampling.tooltip": "实时把新生成或修改过的区块写入持久化的 LOD 八叉树数据。",
 
   "voxel.option.worker_threads": "工作线程数",
-  "voxel.option.worker_threads.tooltip": "用于体素处理和地形网格构建的并行线程数。多核 CPU 上提高该值可加快 LOD 生成。",
-
-  "voxel.option.auto_pregen": "自动预生成",
-  "voxel.option.auto_pregen.tooltip": "进入单人世界时自动预生成出生点周围的远景 LOD 数据，避免刚进世界时地平线出现空洞。",
-
-  "voxel.option.auto_pregen_radius": "预生成半径",
-  "voxel.option.auto_pregen_radius.tooltip": "自动预生成覆盖的区块半径（16 到 128）。",
-
-  "voxel.option.auto_pregen_threads": "预生成线程数",
-  "voxel.option.auto_pregen_threads.tooltip": "专门用于世界预生成的线程数量。",
+  "voxel.option.worker_threads.tooltip": "用于体素处理和地形网格构建的并行线程数。建议设置为 %s（你的 CPU 有 %s 个逻辑线程，最大支持 %s）。设置过高会与游戏和着色器管线争抢 CPU。",
 
   "voxel.option.f3_diagnostics": "F3 诊断信息",
-  "voxel.option.f3_diagnostics.tooltip": "在 F3 调试屏幕上显示八叉树遍历数量、GPU 间接绘制批次和显存占用。会每帧回读 GPU 统计，对帧率有影响，仅调试时开启；Apply 后自动重载渲染器。",
+  "voxel.option.f3_diagnostics.tooltip": "在 F3 屏幕显示精简的 LOD 摘要：当前管线、几何/显存占用、工作队列和帧时间；详细遍历计数仍会写入周期日志。会每帧回读 GPU 统计，对帧率有影响，仅调试时开启；Apply 后自动重载渲染器。",
 
   "voxel.option.gpu_timing": "GPU 计时",
   "voxel.option.gpu_timing.tooltip": "仅调试用：在每个 LOD pass 前后写入 Vulkan 时间戳，每 15 帧回读一次。Bottom-of-pipe 时间戳可能让 pass 串行，正常游玩请关闭。",
@@ -54,16 +42,7 @@
   "voxel.option.seam_overlap.tooltip": "原版区块边界与远景 LOD 网格之间的几何重叠余量。1 到 2 可以消除可见裂缝和飞行时的区块弹入。",
 
   "voxel.option.vram_budget": "显存预算（单缓冲）",
-  "voxel.option.vram_budget.tooltip": "LOD 几何占用的单缓冲显存上限。引擎还会分配一份等大的光照/AO 缓冲，因此总显存占用为该值的 2 倍。Auto 会根据显卡显存自动选择（4GB 卡每缓冲 512MB 起，12GB 以上最高每缓冲 1.5GB）。Apply 后会自动重载渲染器。",
-
-  "voxel.option.planetary_curvature": "星球曲率",
-  "voxel.option.planetary_curvature.tooltip": "模拟站在球形星球上，让远处地形随距离下沉（0 = 平面世界，数值越大星球越小）。",
-
-  "voxel.option.temporal_catchup": "时域补画",
-  "voxel.option.temporal_catchup.tooltip": "把本帧新变得可见的区块再补画一遍。快速转视角时能填补空洞，代价是多一次绘制。",
-
-  "voxel.option.temporal_draws": "补画预算",
-  "voxel.option.temporal_draws.tooltip": "时域补画每帧最多提交的区块数量。",
+  "voxel.option.vram_budget.tooltip": "简单理解：这一项决定远景地形最多能占用多少显存。滑块显示的是“一份”的大小，游戏实际还会再分配一份同样大小的光照/AO 缓冲，所以总占用约为显示值的 2 倍。建议：4GB 显卡选 512MB/缓冲（总约 1GB），8GB 显卡选 1024MB（总约 2GB），12GB 显卡选 1536MB（总约 3GB），16GB 及以上选 2048MB（总约 4GB）。设得太高会和光影/其他模组抢显存，可能卡顿或崩溃；设得太低远处地形可能缺块。想省心就选 Auto，它会按显卡自动给安全值；改完点 Apply 生效。",
 
   "voxel.option.atmospheric_fog": "大气雾",
   "voxel.option.atmospheric_fog.tooltip": "让远景 LOD 地形与生物群系大气颜色和原版地平线雾自然过渡。Apply 后会自动重载渲染器。",

@@ -9,7 +9,7 @@
   "voxel.option.enabled.tooltip": "Master activation toggle for the Voxel LOD engine. When active, distant world geometry is dynamically captured into compressed sparse voxel octrees and rendered directly on the GPU. Toggling it reloads the renderer on Apply.",
 
   "voxel.option.worker_threads": "Worker Threads",
-  "voxel.option.worker_threads.tooltip": "Number of parallel CPU worker threads allocated for voxel processing and terrain meshing. Higher values accelerate LOD generation on multi-core processors.",
+  "voxel.option.worker_threads.tooltip": "Recommended: %s threads on this CPU (%s logical threads, supported maximum %s). More threads speed up LOD generation but leave less CPU headroom for the game and shader pipeline.",
 
   "voxel.option.share_sodium_threads": "Share Sodium Pool",
   "voxel.option.share_sodium_threads.tooltip": "Coordinates background worker tasks with Sodium's chunk mesher pool, minimizing CPU cache thrashing and eliminating micro-stutters during high-speed exploration.",
@@ -18,19 +18,10 @@
   "voxel.option.world_sampling.tooltip": "Enables real-time capture and compression of newly generated or modified Minecraft chunks into persistent LOD voxel octrees as you traverse the world.",
 
   "voxel.option.vram_budget": "VRAM Budget (per buffer)",
-  "voxel.option.vram_budget.tooltip": "Per-buffer video memory allocated for LOD geometry storage. The engine allocates a second, equally sized light/AO buffer, so total GPU memory is 2x this value. Auto mode dynamically adjusts allocation based on detected GPU VRAM (512MB per buffer for 4GB cards up to 1.5GB per buffer for 12GB+ cards) to prevent out-of-memory crashes. Apply reloads the renderer automatically.",
-
-  "voxel.option.auto_pregen": "Auto Pre-generation",
-  "voxel.option.auto_pregen.tooltip": "Automatically pre-generates distant LOD octree data around world spawn upon joining a Singleplayer world, eliminating empty horizon holes before you start moving.",
-
-  "voxel.option.auto_pregen_radius": "Pre-gen Radius",
-  "voxel.option.auto_pregen_radius.tooltip": "Distance in chunks surrounding spawn to pre-build during automated pre-generation (16 to 128 chunks).",
-
-  "voxel.option.auto_pregen_threads": "Pre-gen Workers",
-  "voxel.option.auto_pregen_threads.tooltip": "Number of background threads dedicated strictly to world pre-generation pipelines.",
+  "voxel.option.vram_budget.tooltip": "Simple version: this limits how much VRAM distant terrain may use. The slider shows one buffer, and the game allocates a second identical buffer for light/AO, so total usage is about 2x the shown value. Suggested: 4 GB GPU = 512 MB/buffer (~1 GB total), 8 GB = 1024 MB (~2 GB), 12 GB = 1536 MB (~3 GB), 16 GB or more = 2048 MB (~4 GB). Too high can fight shaders/other mods for VRAM and cause stutter or crashes; too low can leave far terrain incomplete. Auto picks a safe value for your GPU; press Apply to take effect.",
 
   "voxel.option.f3_diagnostics": "F3 Diagnostics",
-  "voxel.option.f3_diagnostics.tooltip": "Displays real-time octree traversal counts, GPU indirect draw batches, and VRAM memory footprint on the F3 screen. It costs a per-frame GPU readback, so enable it for debugging only. Apply reloads the renderer automatically.",
+  "voxel.option.f3_diagnostics.tooltip": "Shows a compact LOD summary on the F3 screen: active pipeline, geometry/VRAM usage, work queues, and frame timings. Detailed traversal counters remain in the periodic log dump. It costs a per-frame GPU readback, so enable it for debugging only. Apply reloads the renderer automatically.",
 
   "voxel.option.rendering": "LOD Rendering",
   "voxel.option.rendering.tooltip": "Enables GPU-driven drawing of distant voxel terrain. Disabling stops rasterization to save GPU power while background data sampling and octree caching remain active. Takes effect immediately on Apply.",
@@ -47,9 +38,6 @@
   "voxel.option.atmospheric_fog": "Atmospheric Fog",
   "voxel.option.atmospheric_fog.tooltip": "Seamlessly harmonizes distant LOD terrain with biome atmospheric colors and vanilla horizon fog, producing a unified natural horizon. Apply reloads the renderer automatically.",
 
-  "voxel.option.planetary_curvature": "Planetary Curvature",
-  "voxel.option.planetary_curvature.tooltip": "Simulates standing on a spherical celestial body by curving distant terrain downward over vast horizons (0 = Flat World; 1 = Earth scale; higher values simulate smaller planets).",
-
   "voxel.option.shader_shadows": "Shader Shadows",
   "voxel.option.shader_shadows.tooltip": "Extends sunlight attenuation, cloud shadows, and ambient shading from Beryl shaders across distant LOD landscapes.",
 
@@ -58,11 +46,8 @@
 
   "voxel.block.core": "Core",
   "voxel.block.threads": "Threads",
-  "voxel.block.pregen": "Pre-generation",
   "voxel.block.diagnostics": "Diagnostics",
   "voxel.block.geometry": "Geometry",
-  "voxel.block.world_shape": "World Shape",
-  "voxel.block.temporal": "Temporal",
   "voxel.block.shading": "Shading",
 
   "voxel.option.sub_division": "Sub-division Size",
@@ -70,12 +55,6 @@
 
   "voxel.option.lod_scale": "LOD Resolution Scale",
   "voxel.option.lod_scale.tooltip": "Internal render resolution of the distant LOD pass as a percentage of the window. Lower values save a lot of GPU time but soften far terrain.",
-
-  "voxel.option.temporal_catchup": "Temporal Catch-up",
-  "voxel.option.temporal_catchup.tooltip": "Re-draws sections that became visible this frame. Fills holes during fast camera movement at the cost of a second draw pass.",
-
-  "voxel.option.temporal_draws": "Catch-up Draw Budget",
-  "voxel.option.temporal_draws.tooltip": "Maximum number of sections the temporal catch-up pass may submit per frame.",
 
   "voxel.option.gpu_timing": "GPU Timing",
   "voxel.option.gpu_timing.tooltip": "Debug only: writes Vulkan timestamps around each LOD pass and reads them back every 15 frames. Bottom-of-pipe timestamps can serialise passes, so keep it off while playing.",

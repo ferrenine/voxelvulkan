@@ -119,7 +119,7 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
         VkVoxel.computeBarrier();
         this.colourSSAOTex.image().transition(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-        // Update HiZ mip 0 with the complete opaque depth (including temporal sections and converted near-field depth) for water SSR
+        // Update HiZ mip 0 with the complete opaque depth (including converted near-field depth) for water SSR
         float m32v = viewport.vanillaProjection.m32();
         float depthScale = Math.abs(m32v) > 1e-6f ? (viewport.projection.m32() / m32v) : 0.0f;
         float depthBias = depthScale * viewport.vanillaProjection.m22() - viewport.projection.m22();

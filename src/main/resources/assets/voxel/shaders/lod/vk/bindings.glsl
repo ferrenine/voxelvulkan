@@ -3,7 +3,7 @@ layout(binding = 0, std140) uniform SceneUniform {
     ivec3 baseSectionPos;
     uint frameId;
     vec3 cameraSubPos;
-    float uEarthRadius; // 0.0 = disabled, otherwise radius in blocks for world curvature
+    // 4 bytes of std140 padding; the next vec4 starts at offset 96.
     vec4 uBerylLightDir;     // xyz = lightDirWS, w = berylActive (1.0 or 0.0)
     vec4 uBerylLightColor;   // rgb = LightColor, a = LightIntensity
     vec4 uBerylAmbientLight; // rgb = AmbientLight, a = LightVisibility
@@ -84,7 +84,6 @@ layout(binding = DRAW_COUNT_BUFFER_BINDING, std430) restrict buffer DrawCommandC
 
     uint opaqueDrawCount;
     uint translucentDrawCount;
-    uint temporalOpaqueDrawCount;
 
     DrawCommand cullDrawIndirectCommand;
 };

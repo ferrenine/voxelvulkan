@@ -1,5 +1,6 @@
 package voxel.client.mixin.minecraft;
 
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.DebugScreenOverlay;
 import org.spongepowered.asm.mixin.Mixin;
@@ -9,6 +10,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import voxel.client.config.VoxelConfig;
 import voxel.client.core.IGetVoxelRenderSystem;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -32,7 +34,18 @@ public class MixinDebugScreenOverlay {
             return;
         }
         try {
-            system.addDebugInfo(lines);
+            List<String> voxelLines = new ArrayList<>();
+            system.addDebugInfo(voxelLines);
+
+            // Keep the LOD block inside the left column. Vanilla's own lines can
+            // already fill a small screen, so cap the optional lines instead of
+            // drawing them past the bottom edge. Always keep the first three
+            // (pipeline/config, frame time, memory) as the useful minimum.
+            int guiHeight = Minecraft.getInstance().getWindow().getGuiScaledHeight();
+            int available = Math.max(3, (guiHeight / 9) - lines.size() - 2);
+            for (int i = 0; i < voxelLines.size() && i < available; i++) {
+                lines.add(voxelLines.get(i));
+            }
         } catch (Throwable ignored) {
             // The debug overlay must never be able to take the game down.
         }

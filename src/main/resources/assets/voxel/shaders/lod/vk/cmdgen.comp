@@ -52,9 +52,6 @@ void writeCmd(uint idx, uint instance, uint offset, uint quadCount) {
 #ifndef OPAQUE_CAPACITY
 #define OPAQUE_CAPACITY 400000
 #endif
-#ifndef TEMPORAL_CAPACITY
-#define TEMPORAL_CAPACITY 100000
-#endif
 #ifndef TRANSLUCENT_ID_CAPACITY
 #define TRANSLUCENT_ID_CAPACITY 100000
 #endif
@@ -149,15 +146,10 @@ void main() {
     uint detail = extractDetail(meta);
     ivec3 ipos = extractPosition(meta);
 
-    uint prevVis = visibilityData[sectionId] & 0x7fffffffu;
-    bool wasVisibleLastFrame = (prevVis == (frameId - 1u));
     bool shouldRender = testSectionHiZVisibility(meta, detail, ipos);
     if (shouldRender) {
-        visibilityData[sectionId] = (frameId & 0x7fffffffu) | (uint(wasVisibleLastFrame) << 31);
+        visibilityData[sectionId] = frameId & 0x7fffffffu;
     }
-    bool renderTemporally = !wasVisibleLastFrame;
-
-
 
     if (shouldRender) {
 
@@ -197,28 +189,10 @@ void main() {
         }
         warpBase = subgroupBroadcastFirst(warpBase);
         uint cmdPtr = warpBase + localOffset;
-
-        uint tCmdPtr = 0;
-        if (renderTemporally) {
-            uint tLocalOffset = subgroupExclusiveAdd(cmdCnt);
-            uint tTotalWarpCount = subgroupAdd(cmdCnt);
-            uint tWarpBase = 0;
-            if (subgroupElect() && tTotalWarpCount > 0) {
-                tWarpBase = atomicAdd(temporalOpaqueDrawCount, tTotalWarpCount);
-            }
-            tWarpBase = subgroupBroadcastFirst(tWarpBase);
-            tCmdPtr = tWarpBase + tLocalOffset + TEMPORAL_OFFSET;
-        }
 #else
         uint cmdPtr = atomicAdd(opaqueDrawCount, cmdCnt);
-
-        uint tCmdPtr = 0;
-        if (renderTemporally) {
-            tCmdPtr = atomicAdd(temporalOpaqueDrawCount, cmdCnt) + TEMPORAL_OFFSET;
-        }
 #endif
 
-        //TODO: make totalQuads also have temporal amount
         #ifdef HAS_STATISTICS
         uint totalQuads = 0;
         #endif
@@ -248,10 +222,6 @@ void main() {
         if (count != 0) {
             if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
             cmdPtr++;
-            if (renderTemporally) {
-                if (tCmdPtr < TEMPORAL_OFFSET+TEMPORAL_CAPACITY) writeCmd(tCmdPtr, drawId, ptr, count);
-                tCmdPtr++;
-            }
             #ifdef HAS_STATISTICS
             totalQuads += count;
             #endif
@@ -263,10 +233,6 @@ void main() {
         if (((msk&(1u<<0))!=0)) {
             if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
             cmdPtr++;
-            if (renderTemporally) {
-                if (tCmdPtr < TEMPORAL_OFFSET+TEMPORAL_CAPACITY) writeCmd(tCmdPtr, drawId, ptr, count);
-                tCmdPtr++;
-            }
             #ifdef HAS_STATISTICS
             totalQuads += count;
             #endif
@@ -278,10 +244,6 @@ void main() {
         if ((msk&(1u<<1))!=0) {
             if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
             cmdPtr++;
-            if (renderTemporally) {
-                if (tCmdPtr < TEMPORAL_OFFSET+TEMPORAL_CAPACITY) writeCmd(tCmdPtr, drawId, ptr, count);
-                tCmdPtr++;
-            }
             #ifdef HAS_STATISTICS
             totalQuads += count;
             #endif
@@ -293,10 +255,6 @@ void main() {
         if ((msk&(1u<<2))!=0) {
             if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
             cmdPtr++;
-            if (renderTemporally) {
-                if (tCmdPtr < TEMPORAL_OFFSET+TEMPORAL_CAPACITY) writeCmd(tCmdPtr, drawId, ptr, count);
-                tCmdPtr++;
-            }
             #ifdef HAS_STATISTICS
             totalQuads += count;
             #endif
@@ -308,10 +266,6 @@ void main() {
         if ((msk&(1u<<3))!=0) {
             if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
             cmdPtr++;
-            if (renderTemporally) {
-                if (tCmdPtr < TEMPORAL_OFFSET+TEMPORAL_CAPACITY) writeCmd(tCmdPtr, drawId, ptr, count);
-                tCmdPtr++;
-            }
             #ifdef HAS_STATISTICS
             totalQuads += count;
             #endif
@@ -323,10 +277,6 @@ void main() {
         if ((msk&(1u<<4))!=0) {
             if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
             cmdPtr++;
-            if (renderTemporally) {
-                if (tCmdPtr < TEMPORAL_OFFSET+TEMPORAL_CAPACITY) writeCmd(tCmdPtr, drawId, ptr, count);
-                tCmdPtr++;
-            }
             #ifdef HAS_STATISTICS
             totalQuads += count;
             #endif
@@ -338,10 +288,6 @@ void main() {
         if ((msk&(1u<<5))!=0) {
             if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
             cmdPtr++;
-            if (renderTemporally) {
-                if (tCmdPtr < TEMPORAL_OFFSET+TEMPORAL_CAPACITY) writeCmd(tCmdPtr, drawId, ptr, count);
-                tCmdPtr++;
-            }
             #ifdef HAS_STATISTICS
             totalQuads += count;
             #endif

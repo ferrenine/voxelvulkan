@@ -181,8 +181,13 @@ vec3 traceWaterSSR(vec3 worldPos, vec3 R, vec3 skyColor) {
     vec4 clipR = MVP * vec4(R, 0.0f);
     float waterDist = length(vRelPos);
 
-    // Exact perspective-correct clip-space raymarching with fine near-shore steps (no Bayer stipple blur)
-    const int STEPS = 20;
+    // Exact perspective-correct clip-space raymarching with fine near-shore steps (no Bayer stipple blur).
+    // The old trace stopped at 140 blocks, so water inside the vanilla ring reflected
+    // Beryl's distant mountains while the same water outside it fell back to sky.
+    // Beryl's adaptive SSR reaches far beyond that; use a wider, denser trace so the
+    // far LOD sees the same terrain reflection as the near chunks.
+    const int STEPS = 48;
+    const float MAX_TRACE_DIST = 1024.0f;
     float prevDist = 0.0f;
     float prevRayZ = startNDC.z;
     vec2 hitUV = vec2(0.0f);
@@ -190,7 +195,7 @@ vec3 traceWaterSSR(vec3 worldPos, vec3 R, vec3 skyColor) {
 
     for (int i = 1; i <= STEPS; i++) {
         float t = float(i) / float(STEPS);
-        float dist = 0.40f + 140.0f * t * (0.18f + 0.82f * t);
+        float dist = 0.35f + MAX_TRACE_DIST * t * t;
         vec4 clip = startClip + clipR * dist;
         if (clip.w <= 0.1f) {
             break;

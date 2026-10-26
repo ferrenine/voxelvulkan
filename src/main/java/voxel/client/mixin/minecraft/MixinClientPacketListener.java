@@ -23,14 +23,12 @@ public class MixinClientPacketListener {
                 VoxelCommon.createInstance();
             }
             voxel.client.network.ClientLodStreamManager.reset();
-            voxel.client.pregen.WorldPregenerator.triggerAutoPregenIfEnabled();
         }
     }
 
     @Inject(method = "handleRespawn", at = @At("HEAD"))
     private void voxel$onRespawn(net.minecraft.network.protocol.game.ClientboundRespawnPacket packet, CallbackInfo ci) {
         voxel.client.network.ClientLodStreamManager.reset();
-        voxel.client.pregen.WorldPregenerator.getInstance().cancelPregen();
     }
 
     @Inject(method = "enableChunkLight", at = @At("TAIL"))
