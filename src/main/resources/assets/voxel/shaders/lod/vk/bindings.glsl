@@ -84,8 +84,6 @@ layout(binding = DRAW_COUNT_BUFFER_BINDING, std430) restrict buffer DrawCommandC
 
     uint opaqueDrawCount;
     uint translucentDrawCount;
-    // Sections routed through the alpha-test/cutout pipeline.
-    uint cutoutDrawCount;
 
     DrawCommand cullDrawIndirectCommand;
 };

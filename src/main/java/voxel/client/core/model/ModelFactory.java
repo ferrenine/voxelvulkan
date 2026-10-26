@@ -5,6 +5,7 @@ import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectSet;
+import voxel.client.compat.lambdabettergrass.LambdaBetterGrassCompat;
 import voxel.client.core.vk.Capabilities;
 import voxel.client.core.vk.VkBuffer;
 import voxel.client.core.vk.VkTexture;
@@ -150,6 +151,10 @@ public class ModelFactory {
     //Provides a map from id -> model id as multiple ids might have the same internal model id
     private final int[] idMappings;
     private final int[] stairStepLUT;
+    /** Base model id -> LambdaBetterGrass connected-side sibling model id, or -1. */
+    private final int[] lbgVariantLUT;
+    /** CPU copy of the last uploaded 64-byte model record, used by the LBG sibling. */
+    private final MemoryBuffer modelDataCache;
     private final Object2IntOpenHashMap<ModelEntry> modelTexture2id = new Object2IntOpenHashMap<>();
 
     //Contains the set of all block ids that are currently inflight/being baked
@@ -203,10 +208,13 @@ public class ModelFactory {
         this.metadataCache = new long[MAX_MODEL_COUNT];
         this.fluidStateLUT = new int[MAX_MODEL_COUNT];
         this.stairStepLUT = new int[MAX_MODEL_COUNT];
+        this.lbgVariantLUT = new int[MAX_MODEL_COUNT];
+        this.modelDataCache = new MemoryBuffer((long) MAX_MODEL_COUNT * MODEL_SIZE);
         this.idMappings = new int[1<<20];//Max of 1 million blockstates mapping to 65k model states
         Arrays.fill(this.idMappings, -1);
         Arrays.fill(this.fluidStateLUT, -1);
         Arrays.fill(this.stairStepLUT, -1);
+        Arrays.fill(this.lbgVariantLUT, -1);
 
         this.modelTexture2id.defaultReturnValue(-1);
         this.blockStatesInFlight.add(0);
@@ -285,6 +293,10 @@ public class ModelFactory {
         public boolean lavaFlowCapture;
         /** Lava refresh uploads extend side tiles to full height (flow strip); generic refreshes don't. */
         public boolean extendSidesOnRefresh;
+        /** This bake is the LambdaBetterGrass connected-side sibling of {@link #blockId}'s base model. */
+        public boolean lbgVariant;
+        /** The LBG wrapper actually emitted quads for the synthetic ledge. */
+        public boolean lbgCaptured;
 
         public RawBakeResult(int blockId, BlockState blockState, MemoryBuffer rawData) {
             this.blockId = blockId;
@@ -374,6 +386,23 @@ public class ModelFactory {
             result.hasDarkenedTextures = (flags&2)!=0;
             result.isShaded = (flags&1)!=0;
             result.hasAnimatedSprites = (flags&4)!=0;
+
+            // LambdaBetterGrass changes the side quads only in the Fabric
+            // emitQuads path. Bake a second, connected-side sibling of the
+            // same state; the mesher selects it per side face.
+            if (!isLava && LambdaBetterGrassCompat.isLBGState(blockState)) {
+                RawBakeResult variant = new RawBakeResult(blockId, blockState);
+                variant.lbgVariant = true;
+                int variantAllocation = this.downstream.download(
+                        MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE*2*4*6,
+                        ptr -> this.rawBakeResults.add(variant.cpyBuf(ptr)));
+                int variantFlags = this.bakery.renderToStream(
+                        blockState, this.downstream.getBufferId(), variantAllocation, false, true);
+                variant.lbgCaptured = (variantFlags & 8) != 0;
+                variant.hasDarkenedTextures = (variantFlags & 2) != 0;
+                variant.isShaded = (variantFlags & 1) != 0;
+                variant.hasAnimatedSprites = (variantFlags & 4) != 0;
+            }
         } catch (RuntimeException | Error e) {
             // The bake never reaches processTextureBakeResult, so nobody else
             // would remove this marker; without this the block id stays
@@ -406,6 +435,12 @@ public class ModelFactory {
             }
         }
         result.rawData.free();
+        if (result.lbgVariant) {
+            if (result.lbgCaptured) {
+                this.processLBGVariantBakeResult(result, textureData);
+            }
+            return !this.rawBakeResults.isEmpty();
+        }
         if (result.refreshModelId >= 0) {
             // Animation refresh: replace the existing model's atlas tile only.
             this.uploadResults.add(createTextureRefreshUpload(result.refreshModelId, textureData, result.hasDarkenedTextures, result.extendSidesOnRefresh));
@@ -1096,6 +1131,12 @@ public class ModelFactory {
             MemoryUtil.memPutInt(uploadPtr, packedSlope); uploadPtr += 4;
         }
 
+        // Keep a CPU copy so a LambdaBetterGrass sibling can share the same
+        // geometry record and only replace its atlas tile.
+        MemoryUtil.memCopy(
+                uploadResult.model.address,
+                this.modelDataCache.address + (long) modelId * MODEL_SIZE,
+                MODEL_SIZE);
 
         //Note: if the layer isSolid then need to fill all the points in the texture where alpha == 0 with the average colour
         // of the surrounding blocks but only within the computed face size bounds
@@ -1124,6 +1165,63 @@ public class ModelFactory {
         }
 
         return uploadResult;
+    }
+
+    /**
+     * Registers the connected-side sibling produced by
+     * {@link LambdaBetterGrassCompat}. The geometry is the same as the base
+     * model, so its 64-byte model record is copied and only the four side tint
+     * bits are refreshed from the LBG-generated textures.
+     */
+    private void processLBGVariantBakeResult(RawBakeResult result, ColourDepthTextureData[] textureData) {
+        int baseModelId = getModelIdAcquire(result.blockId);
+        if (baseModelId <= 0) {
+            // The base model was dropped (overflow, or processed out of order).
+            return;
+        }
+        if (this.lbgVariantLUT[baseModelId] != -1) {
+            return;
+        }
+        int variantModelId = this.modelTexture2id.size();
+        if (variantModelId >= MAX_MODEL_COUNT) {
+            this.reportModelOverflow("LambdaBetterGrass sibling of model " + baseModelId);
+            return;
+        }
+
+        ModelEntry entry = new ModelEntry(
+                copyTextureData(textureData), -3 - baseModelId, -1, 0);
+        this.modelTexture2id.put(entry, variantModelId);
+        this.lbgVariantLUT[baseModelId] = variantModelId;
+        this.metadataCache[variantModelId] = this.metadataCache[baseModelId];
+        this.fluidStateLUT[variantModelId] = this.fluidStateLUT[baseModelId];
+
+        ModelBakeResultUpload upload = new ModelBakeResultUpload();
+        upload.modelId = variantModelId;
+        MemoryUtil.memCopy(
+                this.modelDataCache.address + (long) baseModelId * MODEL_SIZE,
+                upload.model.address,
+                MODEL_SIZE);
+
+        ChunkSectionLayer layer = ItemBlockRenderTypes.getChunkRenderType(result.blockState);
+        int checkMode = layer == ChunkSectionLayer.SOLID ? TextureUtils.WRITE_CHECK_STENCIL : TextureUtils.WRITE_CHECK_ALPHA;
+        for (int face = 2; face < 6; face++) {
+            long ptr = upload.model.address + 4L * face;
+            int faceData = MemoryUtil.memGetInt(ptr);
+            if (faceData == -1) {
+                continue;
+            }
+            int tintState = TextureUtils.computeFaceTint(textureData[face], checkMode);
+            faceData &= ~(3 << 24);
+            if (tintState == 2) {
+                faceData |= 1 << 24;
+            } else if (tintState == 3) {
+                faceData |= 2 << 24;
+            }
+            MemoryUtil.memPutInt(ptr, faceData);
+        }
+
+        MipGen.putTextures(result.hasDarkenedTextures, textureData, upload.texture);
+        this.uploadResults.add(upload);
     }
 
     private static final class BiomeUploadResult implements ResultUploader {
@@ -1495,6 +1593,11 @@ public class ModelFactory {
         return (clientModelId >= 0 && clientModelId < this.stairStepLUT.length) ? this.stairStepLUT[clientModelId] : -1;
     }
 
+    /** {@return the LambdaBetterGrass connected-side sibling of a model id, or -1} */
+    public int getLambdabettergrassVariant(int clientModelId) {
+        return (clientModelId >= 0 && clientModelId < this.lbgVariantLUT.length) ? this.lbgVariantLUT[clientModelId] : -1;
+    }
+
     /**
      * Vanilla per-position model offset (BlockBehaviour.OffsetType XZ / XYZ) as two half floats:
      * low = max horizontal offset, high = max vertical offset (0 for XZ). Returns 0 when the
@@ -1603,6 +1706,7 @@ public class ModelFactory {
     public void free() {
         this.bakery.free();
         this.downstream.free();
+        this.modelDataCache.free();
         while (!this.rawBakeResults.isEmpty()) {
             this.rawBakeResults.poll().rawData.free();
         }

@@ -607,8 +607,7 @@ void main() {
     // tiles once per block like the near field instead of once per LOD cell
     // (which stretched one 16x16 tile over 2^lod blocks and made the far
     // terrain look flat/light against the near terrain).
-    int lodLevel = int((interData.w >> 3) & 7u);
-    float lodScale = float(1u << lodLevel);
+    float lodScale = float(1u << ((interData.w >> 3) & 7u));
     vec2 uvBlocks = uv * lodScale;
     // interData.x stores quadSize-1. The quad spans quadSize * lodScale
     // blocks, so the UV range has to reach the END of the last block, not its
@@ -700,26 +699,20 @@ void main() {
     #endif
     #endif
 
-    // Exact mip-0 alpha for cutout leaves/grass. The opaque pipeline skips
-    // this whole test because its sections contain no cutout models.
+    //Also, small quad is really fking over the mipping level somehow
     #ifndef TRANSLUCENT
     colour.a = 1.0f;
-    #ifndef NO_CUTOUT
     if (useDiscard() && (textureLod(blockModelAtlas, texPos, 0).a <= 0.1f)) {
-        #ifndef DEBUG_RENDER
-        discard;
-        return;
-        #endif
-    }
-    #endif
     #else
     if (textureLod(blockModelAtlas, texPos, 0).a == 0.0f) {
+    #endif
+        //AUDIT-FIXME: samples the exact pixel (no lod) for discarding — bad for
+        // divergence, but it stops mipmapping from producing wrong alpha.
         #ifndef DEBUG_RENDER
         discard;
         return;
         #endif
     }
-    #endif
 
     #ifdef SHADOW_PASS
     // Beryl shadow.fsh: alpha tested texture colour (only read for coloured shadows)

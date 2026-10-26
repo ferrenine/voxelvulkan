@@ -3,6 +3,7 @@ package voxel.client.core.model.bakery;
 import com.mojang.blaze3d.opengl.GlTexture;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.vertex.PoseStack;
+import voxel.client.compat.lambdabettergrass.LambdaBetterGrassCompat;
 import voxel.client.core.vk.VkState;
 import voxel.client.vk.VkVoxel;
 import net.minecraft.client.Minecraft;
@@ -60,9 +61,9 @@ public class ModelTextureBakery {
         return meta;
     }
 
-    private void bakeBlockModel(BlockState state, ChunkSectionLayer layer) {
+    private boolean bakeBlockModel(BlockState state, ChunkSectionLayer layer, boolean lbgConnected) {
         if (state.getRenderShape() == RenderShape.INVISIBLE) {
-            return;
+            return false;
         }
         var model = Minecraft.getInstance()
                 .getModelManager()
@@ -70,6 +71,10 @@ public class ModelTextureBakery {
                 .getBlockModel(state);
 
         int meta = getMetaFromLayer(layer);
+
+        if (lbgConnected) {
+            return LambdaBetterGrassCompat.bakeConnected(model, state, this.vc, meta);
+        }
 
         var randomSource = new SingleThreadedRandomSource(42L);
         boolean isFence = state.getBlock() instanceof net.minecraft.world.level.block.FenceBlock;
@@ -86,6 +91,7 @@ public class ModelTextureBakery {
                 }
             }
         }
+        return false;
     }
 
     private void bakeFluidState(BlockState state, ChunkSectionLayer layer, int face) {
@@ -200,6 +206,10 @@ public class ModelTextureBakery {
     }
 
     public int renderToStream(BlockState state, long streamBuffer, int streamOffset, boolean lavaFlowTop) {
+        return this.renderToStream(state, streamBuffer, streamOffset, lavaFlowTop, false);
+    }
+
+    public int renderToStream(BlockState state, long streamBuffer, int streamOffset, boolean lavaFlowTop, boolean lbgConnected) {
         this.capture.clear();
         boolean isBlock = true;
         ChunkSectionLayer layer;
@@ -231,9 +241,10 @@ public class ModelTextureBakery {
         boolean isAnyShaded = false;
         boolean isAnyDarkend = false;
         boolean isAnyAnimated = false;
+        boolean lbgCaptured = false;
         if (isBlock) {
             this.vc.reset();
-            this.bakeBlockModel(state, layer);
+            lbgCaptured = this.bakeBlockModel(state, layer, lbgConnected);
             isAnyShaded |= this.vc.anyShaded;
             isAnyDarkend |= this.vc.anyDarkendTex;
             isAnyAnimated |= this.vc.anyAnimated;
@@ -297,7 +308,7 @@ public class ModelTextureBakery {
         }
 
         return (isAnyShaded ? 1 : 0) | ((isAnyDarkend && layer == ChunkSectionLayer.SOLID) ? 2 : 0)
-                | (isAnyAnimated ? 4 : 0);
+                | (isAnyAnimated ? 4 : 0) | (lbgCaptured ? 8 : 0);
     }
 
     static {

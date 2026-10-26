@@ -38,5 +38,8 @@
   "recommends": {
     "beryl": ">=0.2.0",
     "modmenu": ">=17.0.1"
+  },
+  "suggests": {
+    "lambdabettergrass": "*"
   }
 }

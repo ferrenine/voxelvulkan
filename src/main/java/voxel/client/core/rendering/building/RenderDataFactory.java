@@ -88,8 +88,6 @@ public class RenderDataFactory {
             new java.util.concurrent.atomic.AtomicLong();
     private long sectionOverflowCount;
     private long meshSectionKey;
-    /** True when the current section emitted any cutout/non-full-block geometry. */
-    private boolean sectionHasCutout;
     private long lastOverflowLogNanos;
 
 
@@ -123,6 +121,63 @@ public class RenderDataFactory {
         // most 16x16 cells.
         private final long[] lightKeyScratch = new long[16 * 16];
         private final boolean[] lightUsedScratch = new boolean[16 * 16];
+
+        /** Raw block state id at a local section position, or -1 when outside. */
+        private int rawBlockAt(int x, int y, int z) {
+            if ((x | y | z) < 0 || x > 31 || y > 31 || z > 31) {
+                return -1;
+            }
+            return Mapper.getBlockId(RenderDataFactory.this.rawSnapshot[(y << 10) | (z << 5) | x]);
+        }
+
+        /**
+         * Mirrors the fully-connected case of LambdaBetterGrass's side pass:
+         * the visible face has air in front and the block diagonally below the
+         * face is the same state. Section borders deliberately fall back to
+         * the vanilla model instead of reaching into a neighbour snapshot.
+         */
+        private boolean isLBGConnected(int face, int qx, int qz, int auxPos) {
+            if (RenderDataFactory.this.lodLevel != 0) {
+                return false;
+            }
+            int bx;
+            int by;
+            int bz;
+            if (this.axis == 1) {
+                bx = qx;
+                by = qz;
+                bz = auxPos;
+            } else if (this.axis == 2) {
+                bx = auxPos;
+                by = qx;
+                bz = qz;
+            } else {
+                return false;
+            }
+
+            int target = rawBlockAt(bx, by, bz);
+            if (target <= 0) {
+                return false;
+            }
+
+            int dir = (face & 1) == 1 ? 1 : -1;
+            int ax = bx;
+            int ay = by;
+            int az = bz;
+            if (this.axis == 1) {
+                az += dir;
+            } else {
+                ax += dir;
+            }
+
+            // LBG only rewrites side quads; the quad is visible because the
+            // mesher found air (or a non-opaque block) in front. Keep the
+            // selection conservative and only claim real air here.
+            if (rawBlockAt(ax, ay, az) != 0) {
+                return false;
+            }
+            return rawBlockAt(ax, ay - 1, az) == target;
+        }
 
         //Note x, z are in top right
         @Override
@@ -188,13 +243,21 @@ public class RenderDataFactory {
             int modelId = (int) ((data >>> 26) & 0xFFFFL);
 
             long emitModelMeta = RenderDataFactory.this.modelMan.getModelMetadataFromClientId(modelId);
-            if (!ModelQueries.isFullyOpaque(emitModelMeta)
-                    || ModelQueries.needsPerBlockQuads(emitModelMeta)
-                    || ModelQueries.isLeaves(emitModelMeta)) {
-                RenderDataFactory.this.sectionHasCutout = true;
-            }
             boolean lava = ModelQueries.isLava(emitModelMeta);
             boolean lavaFlow = lava && RenderDataFactory.this.lodLevel == 0;
+
+            // LambdaBetterGrass connected-side sibling. Coarse cells take it
+            // for every side face (one cell already stands for a volume); at
+            // LOD0 the split branch picks it per block from the raw neighbours.
+            int lbgVariantId = face > 1
+                    ? RenderDataFactory.this.modelMan.getLambdabettergrassVariant(modelId) : -1;
+            if (lbgVariantId != -1 && RenderDataFactory.this.lodLevel > 0) {
+                modelId = lbgVariantId;
+                data = (data & ~(0xFFFFL << 26)) | (Integer.toUnsignedLong(modelId) << 26);
+                emitModelMeta = RenderDataFactory.this.modelMan.getModelMetadataFromClientId(modelId);
+            }
+            boolean lbgSideSplit = lbgVariantId != -1 && face > 1
+                    && RenderDataFactory.this.lodLevel == 0;
 
             // A coarse fluid cell reports water because some block inside its
             // 2^lodLevel volume is water, but its top face is emitted at the
@@ -359,7 +422,7 @@ public class RenderDataFactory {
                 }
             }
 
-            if (split) {
+            if (split || lbgSideSplit) {
                 int bufferIdx = type+(type==2?face:0);
                 for (int dx = 0; dx < length; dx++) {
                     for (int dz = 0; dz < width; dz++) {
@@ -374,6 +437,10 @@ public class RenderDataFactory {
                         encPos |= qz << (axis==1?16:11);
                         encPos |= auxPos << shiftAmount;
                         long splitQuad = data | Integer.toUnsignedLong(encPos);
+                        if (lbgSideSplit && isLBGConnected(face, qx, qz, auxPos)) {
+                            splitQuad = (splitQuad & ~(0xFFFFL << 26))
+                                    | (Integer.toUnsignedLong(lbgVariantId) << 26);
+                        }
                         long splitLight = RenderDataFactory.this.computeCornerLightAO(
                                 qx, qz, 1, 1, axis, axisSide, auxPos, fallbackLight, volumeLight, leafSelfLight);
                         if (lava) {
@@ -412,25 +479,31 @@ public class RenderDataFactory {
                             continue;
                         }
                         long key = this.lightKeyScratch[base];
+                        boolean canMergeX = (key & 0xFFFFFFFFL) == (key >>> 32);
+                        boolean canMergeZ = ((key ^ (key >>> 16)) & 0x0000FFFF0000FFFFL) == 0L;
                         int runLength = 1;
-                        while (dx + runLength < length) {
-                            int idx = base + runLength;
-                            if (this.lightUsedScratch[idx] || this.lightKeyScratch[idx] != key) {
-                                break;
+                        if (canMergeX) {
+                            while (dx + runLength < length) {
+                                int idx = base + runLength;
+                                if (this.lightUsedScratch[idx] || this.lightKeyScratch[idx] != key) {
+                                    break;
+                                }
+                                runLength++;
                             }
-                            runLength++;
                         }
                         int runWidth = 1;
-                        expand:
-                        while (dz + runWidth < width) {
-                            int row = (dz + runWidth) * length + dx;
-                            for (int i = 0; i < runLength; i++) {
-                                int idx = row + i;
-                                if (this.lightUsedScratch[idx] || this.lightKeyScratch[idx] != key) {
-                                    break expand;
+                        if (canMergeZ) {
+                            expand:
+                            while (dz + runWidth < width) {
+                                int row = (dz + runWidth) * length + dx;
+                                for (int i = 0; i < runLength; i++) {
+                                    int idx = row + i;
+                                    if (this.lightUsedScratch[idx] || this.lightKeyScratch[idx] != key) {
+                                        break expand;
+                                    }
                                 }
+                                runWidth++;
                             }
-                            runWidth++;
                         }
                         for (int rowOffset = 0; rowOffset < runWidth; rowOffset++) {
                             int row = (dz + rowOffset) * length + dx;
@@ -443,7 +516,8 @@ public class RenderDataFactory {
                         encodedPosition |= (z + dz) << (axis == 1 ? 16 : 11);
                         encodedPosition |= auxPos << shiftAmount;
                         long quad = data | Integer.toUnsignedLong(encodedPosition);
-                        long lightAO = applyWaterTopOffset(key, waterTopOffset);
+                        long lightAO = lava ? applyLavaCornerY(key, 0, 0, 0, 0) : key;
+                        lightAO = applyWaterTopOffset(lightAO, waterTopOffset);
 
                         int qi = RenderDataFactory.this.allocQuads(bufferIdx, 1);
                         if (qi < 0) {
@@ -3003,7 +3077,6 @@ public class RenderDataFactory {
         this.maxX = Integer.MIN_VALUE;
         this.maxY = Integer.MIN_VALUE;
         this.maxZ = Integer.MIN_VALUE;
-        this.sectionHasCutout = false;
 
         Arrays.fill(this.quadCounters,0);
         Arrays.fill(this.opaqueMasks, 0);
@@ -3097,11 +3170,6 @@ public class RenderDataFactory {
         aabb |= Math.max(0, this.maxX-this.minX-1)<<15;
         aabb |= Math.max(0, this.maxY-this.minY-1)<<20;
         aabb |= Math.max(0, this.maxZ-this.minZ-1)<<25;
-        // Bit 30 is free (AABB uses bits 0..29). The command generator uses it
-        // to route the whole section through the cutout pipeline.
-        if (this.sectionHasCutout) {
-            aabb |= 1 << 30;
-        }
 
         return new BuiltSection(section.key, section.getNonEmptyChildren(), aabb, buff, lightBuff, offsets);
     }
