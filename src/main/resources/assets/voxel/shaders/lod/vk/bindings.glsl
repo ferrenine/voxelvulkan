@@ -29,7 +29,7 @@ layout(push_constant) uniform ShadowCasterPush {
     mat4 shadowCasterMVP;     // Beryl light-space matrix * translate(-shadowCameraSubPos)
     ivec4 shadowBaseSectionPos;
     vec4 shadowCameraSubPos;
-    vec4 shadowCasterParams;  // x = Beryl shadow distortion, y = 1 / light-space half extent in blocks
+    vec4 shadowCasterParams;  // x = Beryl shadow distortion, y = 1 / light-space half extent in blocks, z = min caster distance (blocks)
 };
 #define LOD_MVP shadowCasterMVP
 #define LOD_BASE_SECTION_POS (shadowBaseSectionPos.xyz)
@@ -84,6 +84,8 @@ layout(binding = DRAW_COUNT_BUFFER_BINDING, std430) restrict buffer DrawCommandC
 
     uint opaqueDrawCount;
     uint translucentDrawCount;
+    // Sections routed through the alpha-test/cutout pipeline.
+    uint cutoutDrawCount;
 
     DrawCommand cullDrawIndirectCommand;
 };

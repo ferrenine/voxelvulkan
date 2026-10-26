@@ -88,6 +88,8 @@ public class RenderDataFactory {
             new java.util.concurrent.atomic.AtomicLong();
     private long sectionOverflowCount;
     private long meshSectionKey;
+    /** True when the current section emitted any cutout/non-full-block geometry. */
+    private boolean sectionHasCutout;
     private long lastOverflowLogNanos;
 
 
@@ -117,6 +119,10 @@ public class RenderDataFactory {
         public int auxiliaryPosition = 0;
         public boolean doAuxiliaryFaceOffset = true;
         public int axis = 0;//Y,Z,X
+        // Reused by the LOD0 light partition; a merged scan rectangle is at
+        // most 16x16 cells.
+        private final long[] lightKeyScratch = new long[16 * 16];
+        private final boolean[] lightUsedScratch = new boolean[16 * 16];
 
         //Note x, z are in top right
         @Override
@@ -182,6 +188,11 @@ public class RenderDataFactory {
             int modelId = (int) ((data >>> 26) & 0xFFFFL);
 
             long emitModelMeta = RenderDataFactory.this.modelMan.getModelMetadataFromClientId(modelId);
+            if (!ModelQueries.isFullyOpaque(emitModelMeta)
+                    || ModelQueries.needsPerBlockQuads(emitModelMeta)
+                    || ModelQueries.isLeaves(emitModelMeta)) {
+                RenderDataFactory.this.sectionHasCutout = true;
+            }
             boolean lava = ModelQueries.isLava(emitModelMeta);
             boolean lavaFlow = lava && RenderDataFactory.this.lodLevel == 0;
 
@@ -298,11 +309,16 @@ public class RenderDataFactory {
             int shiftAmount = axis==0?16:(axis==1?11:21);
 
             // Greedy merging is based on the block data only. At LOD0,
-            // vertical faces must carry their own per-block smooth light/AO,
-            // otherwise the merged quad only has values at its two ends and
-            // the contact shadow appears at the run ends instead of on each
-            // block. Split every vertical run unconditionally at LOD0;
-            // horizontal faces keep the cheaper key-based split.
+            // vertical faces carry their own per-block smooth light/AO; a
+            // merged quad with only corner samples would put the contact
+            // shadow at the run ends instead of on each block. Instead of
+            // degenerating every vertical face into 1x1 quads, partition the
+            // scan rectangle into sub-rectangles whose cells share the exact
+            // same four-corner light/AO key. Uniform cliffs and wall sections
+            // still merge, while the cells around an AO edge stay separate.
+            // Horizontal faces keep the cheaper single scan because they are
+            // usually uniform; only their non-uniform rectangles are
+            // partitioned.
             //
             // At coarse LODs the mesher is already operating on cells that
             // aggregate 2^lodLevel blocks. Carrying one corner sample across
@@ -312,25 +328,31 @@ public class RenderDataFactory {
             // per block in the vertex shader, so they still need one quad per
             // cell at every LOD.
             boolean split = lavaFlow;
+            boolean partition = false;
             if (!lavaFlow && (length > 1 || width > 1)) {
                 boolean perBlockQuads = ModelQueries.needsPerBlockQuads(
                         RenderDataFactory.this.modelMan.getModelMetadataFromClientId(modelId));
-                if (perBlockQuads || (RenderDataFactory.this.lodLevel == 0 && face > 1)) {
+                if (perBlockQuads) {
                     split = true;
                 } else if (RenderDataFactory.this.lodLevel == 0) {
-                    long firstKey = RenderDataFactory.this.computeCornerLightAO(
-                            x, z, 1, 1, axis, axisSide, auxPos, fallbackLight, volumeLight, leafSelfLight);
-                    outer:
-                    for (int dx = 0; dx < length; dx++) {
-                        for (int dz = 0; dz < width; dz++) {
-                            if (dx == 0 && dz == 0) {
-                                continue;
-                            }
-                            long key = RenderDataFactory.this.computeCornerLightAO(
-                                    x + dx, z + dz, 1, 1, axis, axisSide, auxPos, fallbackLight, volumeLight, leafSelfLight);
-                            if (key != firstKey) {
-                                split = true;
-                                break outer;
+                    if (face > 1) {
+                        partition = true;
+                    } else {
+                        long firstKey = RenderDataFactory.this.computeCornerLightAO(
+                                x, z, 1, 1, axis, axisSide, auxPos, fallbackLight, volumeLight, leafSelfLight);
+                        scan:
+                        for (int dx = 0; dx < length; dx++) {
+                            for (int dz = 0; dz < width; dz++) {
+                                if (dx == 0 && dz == 0) {
+                                    continue;
+                                }
+                                long key = RenderDataFactory.this.computeCornerLightAO(
+                                        x + dx, z + dz, 1, 1, axis, axisSide, auxPos,
+                                        fallbackLight, volumeLight, leafSelfLight);
+                                if (key != firstKey) {
+                                    partition = true;
+                                    break scan;
+                                }
                             }
                         }
                     }
@@ -369,6 +391,67 @@ public class RenderDataFactory {
                         long off = qi*8L + bufferIdx*8L*(1<<16);
                         MemoryUtil.memPutLong(RenderDataFactory.this.quadBufferPtr + off, splitQuad);
                         MemoryUtil.memPutLong(RenderDataFactory.this.lightAOBufferPtr + off, splitLight);
+                    }
+                }
+            } else if (partition) {
+                int cells = length * width;
+                for (int dz = 0; dz < width; dz++) {
+                    for (int dx = 0; dx < length; dx++) {
+                        this.lightKeyScratch[dz * length + dx] =
+                                RenderDataFactory.this.computeCornerLightAO(
+                                        x + dx, z + dz, 1, 1, axis, axisSide, auxPos,
+                                        fallbackLight, volumeLight, leafSelfLight);
+                    }
+                }
+                Arrays.fill(this.lightUsedScratch, 0, cells, false);
+                int bufferIdx = type + (type == 2 ? face : 0);
+                for (int dz = 0; dz < width; dz++) {
+                    for (int dx = 0; dx < length; dx++) {
+                        int base = dz * length + dx;
+                        if (this.lightUsedScratch[base]) {
+                            continue;
+                        }
+                        long key = this.lightKeyScratch[base];
+                        int runLength = 1;
+                        while (dx + runLength < length) {
+                            int idx = base + runLength;
+                            if (this.lightUsedScratch[idx] || this.lightKeyScratch[idx] != key) {
+                                break;
+                            }
+                            runLength++;
+                        }
+                        int runWidth = 1;
+                        expand:
+                        while (dz + runWidth < width) {
+                            int row = (dz + runWidth) * length + dx;
+                            for (int i = 0; i < runLength; i++) {
+                                int idx = row + i;
+                                if (this.lightUsedScratch[idx] || this.lightKeyScratch[idx] != key) {
+                                    break expand;
+                                }
+                            }
+                            runWidth++;
+                        }
+                        for (int rowOffset = 0; rowOffset < runWidth; rowOffset++) {
+                            int row = (dz + rowOffset) * length + dx;
+                            Arrays.fill(this.lightUsedScratch, row, row + runLength, true);
+                        }
+
+                        int encodedPosition = face;
+                        encodedPosition |= ((runWidth - 1) << 7) | ((runLength - 1) << 3);
+                        encodedPosition |= (x + dx) << (axis == 2 ? 16 : 21);
+                        encodedPosition |= (z + dz) << (axis == 1 ? 16 : 11);
+                        encodedPosition |= auxPos << shiftAmount;
+                        long quad = data | Integer.toUnsignedLong(encodedPosition);
+                        long lightAO = applyWaterTopOffset(key, waterTopOffset);
+
+                        int qi = RenderDataFactory.this.allocQuads(bufferIdx, 1);
+                        if (qi < 0) {
+                            continue;
+                        }
+                        long off = qi * 8L + bufferIdx * 8L * (1 << 16);
+                        MemoryUtil.memPutLong(RenderDataFactory.this.quadBufferPtr + off, quad);
+                        MemoryUtil.memPutLong(RenderDataFactory.this.lightAOBufferPtr + off, lightAO);
                     }
                 }
             } else {
@@ -2920,6 +3003,7 @@ public class RenderDataFactory {
         this.maxX = Integer.MIN_VALUE;
         this.maxY = Integer.MIN_VALUE;
         this.maxZ = Integer.MIN_VALUE;
+        this.sectionHasCutout = false;
 
         Arrays.fill(this.quadCounters,0);
         Arrays.fill(this.opaqueMasks, 0);
@@ -3013,6 +3097,11 @@ public class RenderDataFactory {
         aabb |= Math.max(0, this.maxX-this.minX-1)<<15;
         aabb |= Math.max(0, this.maxY-this.minY-1)<<20;
         aabb |= Math.max(0, this.maxZ-this.minZ-1)<<25;
+        // Bit 30 is free (AABB uses bits 0..29). The command generator uses it
+        // to route the whole section through the cutout pipeline.
+        if (this.sectionHasCutout) {
+            aabb |= 1 << 30;
+        }
 
         return new BuiltSection(section.key, section.getNonEmptyChildren(), aabb, buff, lightBuff, offsets);
     }

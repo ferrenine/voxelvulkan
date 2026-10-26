@@ -51,6 +51,12 @@ bool shadowCasterSectionOutside(uvec2 sPos) {
     uint lodLevel = extractDetail(sPos);
     float halfSize = 16.0f * float(1u << lodLevel);
     vec3 centre = vec3(((extractLoDPosition(sPos) << lodLevel) - LOD_BASE_SECTION_POS) << 5) + halfSize;
+    // Vanilla chunks cast inside their render distance. The duplicated LOD
+    // shells there are slightly offset in depth and would otherwise draw
+    // block-shaped false shadows across near vanilla grass.
+    if (length(centre - LOD_CAMERA_SUB_POS) < shadowCasterParams.z) {
+        return true;
+    }
     vec2 lightXY = (LOD_MVP * vec4(centre, 1.0f)).xy;
     return any(greaterThan(abs(lightXY) - halfSize * 1.7321f * shadowCasterParams.y, vec2(1.0f)));
 }

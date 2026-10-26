@@ -189,10 +189,11 @@ vec3 traceWaterSSR(vec3 worldPos, vec3 R, vec3 skyColor) {
     const int STEPS = 48;
     const float MAX_TRACE_DIST = 1024.0f;
     // Near water benefits from a denser trace; by the time the water is
-    // hundreds of blocks away the reflection is a slowly varying band and
-    // 8-16 samples are enough. This avoids paying 52 depth samples per water
-    // pixel across an entire ocean view.
-    int steps = waterDist < 128.0f ? 36 : (waterDist < 384.0f ? 16 : 8);
+    // hundreds of blocks away the reflection is a slowly varying band, but
+    // dropping all the way to 8 samples made the reflected ridges crawl and
+    // stripe. 36/24/16 keeps the far reflection stable without paying the
+    // original 48 samples across an entire ocean view.
+    int steps = waterDist < 128.0f ? 36 : (waterDist < 384.0f ? 24 : 16);
     float prevDist = 0.0f;
     float prevRayZ = startNDC.z;
     vec2 hitUV = vec2(0.0f);
@@ -699,30 +700,26 @@ void main() {
     #endif
     #endif
 
-    // Near LODs keep the exact mip-0 alpha test because cutout leaves/grass
-    // need their real holes. Far LODs already use the filtered texture
-    // sample; forcing a second mip-0 fetch there thrashes the atlas cache
-    // across dense canopies for a difference that is below one pixel.
-    float alphaForDiscard;
-    if (lodLevel >= 2) {
-        alphaForDiscard = colour.a;
-    } else {
-        alphaForDiscard = textureLod(blockModelAtlas, texPos, 0).a;
-    }
-
+    // Exact mip-0 alpha for cutout leaves/grass. The opaque pipeline skips
+    // this whole test because its sections contain no cutout models.
     #ifndef TRANSLUCENT
     colour.a = 1.0f;
-    if (useDiscard() && alphaForDiscard <= 0.1f) {
-    #else
-    if (alphaForDiscard == 0.0f) {
-    #endif
-        // The far-LOD path above already tested the filtered alpha; the
-        // mip-0 fetch is only kept for LOD0/1.
+    #ifndef NO_CUTOUT
+    if (useDiscard() && (textureLod(blockModelAtlas, texPos, 0).a <= 0.1f)) {
         #ifndef DEBUG_RENDER
         discard;
         return;
         #endif
     }
+    #endif
+    #else
+    if (textureLod(blockModelAtlas, texPos, 0).a == 0.0f) {
+        #ifndef DEBUG_RENDER
+        discard;
+        return;
+        #endif
+    }
+    #endif
 
     #ifdef SHADOW_PASS
     // Beryl shadow.fsh: alpha tested texture colour (only read for coloured shadows)

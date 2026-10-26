@@ -308,6 +308,9 @@ public class VoxelRenderSystem {
     }
 
     private void recordFrameTime(long frameNanos) {
+        if (!VoxelConfig.CONFIG.renderStatistics) {
+            return;
+        }
         this.frameHistoryNanos[this.frameHistoryIndex++] = frameNanos;
         if (this.frameHistoryIndex < FRAME_HISTORY) {
             return;
@@ -354,7 +357,8 @@ public class VoxelRenderSystem {
             if (this.lastOpaqueStartNanos != 0L) {
                 long frameNanos = now - this.lastOpaqueStartNanos;
                 this.recordFrameTime(frameNanos);
-                if (frameNanos > 20_000_000L && now - this.lastSpikeLogNanos > 1_000_000_000L) {
+                if (VoxelConfig.CONFIG.renderStatistics
+                        && frameNanos > 20_000_000L && now - this.lastSpikeLogNanos > 1_000_000_000L) {
                     this.lastSpikeLogNanos = now;
                     Logger.warn(String.format(java.util.Locale.ROOT,
                             "[FrameSpike] frame=%.2fms pre=%.2f shadow=%.2f vanilla=%.2f voxel=%.2f post=%.2f UC/GC=%d/%d genTasks=%d nodeWork=%s beryl=%s %s",
@@ -412,7 +416,8 @@ public class VoxelRenderSystem {
         if (this.lastOpaqueStartNanos != 0L) {
             long opaqueDuration = opaqueEnd - this.lastOpaqueStartNanos;
             this.lastOpaqueDurationNanos = opaqueDuration;
-            if (opaqueDuration > 20_000_000L && opaqueEnd - this.lastSpikeLogNanos > 1_000_000_000L) {
+            if (VoxelConfig.CONFIG.renderStatistics
+                    && opaqueDuration > 20_000_000L && opaqueEnd - this.lastSpikeLogNanos > 1_000_000_000L) {
                 this.lastSpikeLogNanos = opaqueEnd;
                 Logger.warn(String.format(java.util.Locale.ROOT,
                         "[VoxelSpike] voxel=%.2fms setup=%s traverse=%s opaque=%s blit=%s dynamic=%s main=%s all=%s UC/GC=%d/%d genTasks=%d nodeWork=%s",
@@ -456,9 +461,16 @@ public class VoxelRenderSystem {
         try {
             var camera = Minecraft.getInstance().gameRenderer.getMainCamera().position();
             Matrix4f lightSpace = BerylUtil.getLightSpaceMatrix(new Matrix4f());
+            // Vanilla chunks already cast their own shadows inside their render
+            // distance. Re-casting the duplicated LOD0/coarse shells there puts
+            // a second, slightly offset depth in the shadow map and shadows the
+            // vanilla grass with large block-shaped patches. Let the LOD pass
+            // take over at the vanilla boundary (minus one chunk of overlap).
+            int vanillaChunks = Minecraft.getInstance().options.getEffectiveRenderDistance();
+            float minCasterDistance = Math.max(0.0f, vanillaChunks * 16.0f - 16.0f);
             GPUTiming.INSTANCE.marker("shadow");
             ((AbstractSectionRenderer) this.sectionRenderer).renderShadowCasters(viewport, lightSpace,
-                    camera.x, camera.y, camera.z);
+                    camera.x, camera.y, camera.z, minCasterDistance);
             GPUTiming.INSTANCE.marker("postShadow");
         } catch (Throwable t) {
             this.shadowCastersFailed = true;

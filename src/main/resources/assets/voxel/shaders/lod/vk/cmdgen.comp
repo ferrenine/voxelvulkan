@@ -21,11 +21,16 @@ layout(local_size_x = CMDGEN_WORKGROUP_SIZE) in;
 #define INDIRECT_SECTION_LOOKUP_BINDING 5
 #define POSITION_SCRATCH_BINDING 6
 #define POSITION_SCRATCH_ACCESS writeonly
+#define CUTOUT_DRAW_BUFFER_BINDING 10
 
 #import <voxel:lod/section.glsl>
 #import <voxel:lod/vk/bindings.glsl>
 
 layout(binding = 9) uniform sampler2D hizDepthSampler;
+
+layout(binding = CUTOUT_DRAW_BUFFER_BINDING, std430) restrict writeonly buffer CutoutDrawBuffer {
+    DrawCommand cutoutCmdBuffer[];
+};
 
 #ifdef HAS_STATISTICS
 layout(binding = STATISTICS_BUFFER_BINDING, std430) restrict buffer statisticsBuffer {
@@ -39,6 +44,16 @@ layout(binding = TRANSLUCENT_DISTANCE_BUFFER_BINDING, std430) restrict buffer Tr
     uint[] translucentCommandData;
 };
 
+#ifndef OPAQUE_CAPACITY
+#define OPAQUE_CAPACITY 400000
+#endif
+#ifndef CUTOUT_CAPACITY
+#define CUTOUT_CAPACITY 100000
+#endif
+#ifndef TRANSLUCENT_ID_CAPACITY
+#define TRANSLUCENT_ID_CAPACITY 100000
+#endif
+
 void writeCmd(uint idx, uint instance, uint offset, uint quadCount) {
     DrawCommand cmd;
     cmd.count = quadCount * 6;
@@ -49,12 +64,25 @@ void writeCmd(uint idx, uint instance, uint offset, uint quadCount) {
     cmdBuffer[idx] = cmd;
 }
 
-#ifndef OPAQUE_CAPACITY
-#define OPAQUE_CAPACITY 400000
-#endif
-#ifndef TRANSLUCENT_ID_CAPACITY
-#define TRANSLUCENT_ID_CAPACITY 100000
-#endif
+void writeCutoutCmd(uint idx, uint instance, uint offset, uint quadCount) {
+    DrawCommand cmd;
+    cmd.count = quadCount * 6;
+    cmd.instanceCount = 1;
+    cmd.firstIndex = 0;
+    cmd.baseVertex = int(offset)<<2;
+    cmd.baseInstance = instance;
+    cutoutCmdBuffer[idx] = cmd;
+}
+
+void writeAnyCmd(bool cutout, uint idx, uint instance, uint offset, uint quadCount) {
+    if (cutout) {
+        if (idx < CUTOUT_CAPACITY) {
+            writeCutoutCmd(idx, instance, offset, quadCount);
+        }
+    } else if (idx < OPAQUE_CAPACITY) {
+        writeCmd(idx, instance, offset, quadCount);
+    }
+}
 
 // Reserve one translucent-section id without ever publishing a count past the
 // id buffer (distanceCountBuffer holds TRANSLUCENT_ID_CAPACITY entries).
@@ -162,6 +190,7 @@ void main() {
         uint drawId = gl_GlobalInvocationID.x;
 
         positionBuffer[drawId] = extractRawPos(meta);
+        bool hasCutout = extractHasCutout(meta);
         uvec4 counts = meta.b;
 
         //TODO implicit command merging
@@ -180,17 +209,23 @@ void main() {
 //AUDIT-DEAD: the USE_SUBGROUPS warp-aggregation path is permanently off —
 // MDICSectionRenderer leaves the define commented out; the #else atomicAdd
 // path is what always runs.
+        uint cmdPtr;
 #ifdef USE_SUBGROUPS
-        uint localOffset = subgroupExclusiveAdd(cmdCnt);
-        uint totalWarpCount = subgroupAdd(cmdCnt);
-        uint warpBase = 0;
-        if (subgroupElect() && totalWarpCount > 0) {
-            warpBase = atomicAdd(opaqueDrawCount, totalWarpCount);
+        if (hasCutout) {
+            cmdPtr = atomicAdd(cutoutDrawCount, cmdCnt);
+        } else {
+            uint localOffset = subgroupExclusiveAdd(cmdCnt);
+            uint totalWarpCount = subgroupAdd(cmdCnt);
+            uint warpBase = 0;
+            if (subgroupElect() && totalWarpCount > 0) {
+                warpBase = atomicAdd(opaqueDrawCount, totalWarpCount);
+            }
+            warpBase = subgroupBroadcastFirst(warpBase);
+            cmdPtr = warpBase + localOffset;
         }
-        warpBase = subgroupBroadcastFirst(warpBase);
-        uint cmdPtr = warpBase + localOffset;
 #else
-        uint cmdPtr = atomicAdd(opaqueDrawCount, cmdCnt);
+        cmdPtr = hasCutout ? atomicAdd(cutoutDrawCount, cmdCnt)
+                           : atomicAdd(opaqueDrawCount, cmdCnt);
 #endif
 
         #ifdef HAS_STATISTICS
@@ -220,7 +255,7 @@ void main() {
         //Double sided quads
         count = (counts.x>>16)&0xFFFFu;
         if (count != 0) {
-            if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
+            writeAnyCmd(hasCutout, cmdPtr, drawId, ptr, count);
             cmdPtr++;
             #ifdef HAS_STATISTICS
             totalQuads += count;
@@ -231,7 +266,7 @@ void main() {
         //Down
         count = (counts.y)&0xFFFFu;
         if (((msk&(1u<<0))!=0)) {
-            if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
+            writeAnyCmd(hasCutout, cmdPtr, drawId, ptr, count);
             cmdPtr++;
             #ifdef HAS_STATISTICS
             totalQuads += count;
@@ -242,7 +277,7 @@ void main() {
         //Up
         count = (counts.y>>16)&0xFFFFu;
         if ((msk&(1u<<1))!=0) {
-            if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
+            writeAnyCmd(hasCutout, cmdPtr, drawId, ptr, count);
             cmdPtr++;
             #ifdef HAS_STATISTICS
             totalQuads += count;
@@ -253,7 +288,7 @@ void main() {
         //North
         count = (counts.z)&0xFFFFu;
         if ((msk&(1u<<2))!=0) {
-            if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
+            writeAnyCmd(hasCutout, cmdPtr, drawId, ptr, count);
             cmdPtr++;
             #ifdef HAS_STATISTICS
             totalQuads += count;
@@ -264,7 +299,7 @@ void main() {
         //South
         count = (counts.z>>16)&0xFFFFu;
         if ((msk&(1u<<3))!=0) {
-            if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
+            writeAnyCmd(hasCutout, cmdPtr, drawId, ptr, count);
             cmdPtr++;
             #ifdef HAS_STATISTICS
             totalQuads += count;
@@ -275,7 +310,7 @@ void main() {
         //West
         count = (counts.w)&0xFFFFu;
         if ((msk&(1u<<4))!=0) {
-            if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
+            writeAnyCmd(hasCutout, cmdPtr, drawId, ptr, count);
             cmdPtr++;
             #ifdef HAS_STATISTICS
             totalQuads += count;
@@ -286,7 +321,7 @@ void main() {
         //East
         count = (counts.w>>16)&0xFFFFu;
         if ((msk&(1u<<5))!=0) {
-            if (cmdPtr < OPAQUE_CAPACITY) writeCmd(cmdPtr, drawId, ptr, count);
+            writeAnyCmd(hasCutout, cmdPtr, drawId, ptr, count);
             cmdPtr++;
             #ifdef HAS_STATISTICS
             totalQuads += count;

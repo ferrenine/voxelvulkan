@@ -119,10 +119,7 @@ public class VoxelIngestService {
     }
 
     private static void countDeferred() {
-        long deferred = DEFERRED_LIGHT_SECTIONS.incrementAndGet();
-        if ((deferred & 0xFF) == 0) {
-            Logger.info("[Ingest] deferred " + deferred + " sections until their light data arrives");
-        }
+        DEFERRED_LIGHT_SECTIONS.incrementAndGet();
     }
 
     public boolean enqueueIngest(WorldEngine engine, LevelChunk chunk) {

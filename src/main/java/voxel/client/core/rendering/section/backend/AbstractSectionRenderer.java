@@ -65,7 +65,8 @@ public abstract class AbstractSectionRenderer <T extends Viewport<T>, J extends 
      * {@code lightSpace} is Beryl's camera-relative light-space matrix.
      */
     public void renderShadowCasters(T viewport, Matrix4fc lightSpace,
-                                    double cameraX, double cameraY, double cameraZ) {
+                                    double cameraX, double cameraY, double cameraZ,
+                                    float minCasterDistance) {
     }
 
     public abstract T createViewport();

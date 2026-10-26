@@ -44,3 +44,9 @@ ivec3 extractAABBOffset(SectionMeta meta) {
 ivec3 extractAABBSize(SectionMeta meta) {
     return ((ivec3(meta.a.z)>>ivec3(15,20,25))&31)+1;//The size is + 1 cause its always at least 1x1x1
 }
+
+// Bit 30 of the AABB word: this section contains cutout/non-full-block
+// geometry and must use the alpha-test shader.
+bool extractHasCutout(SectionMeta meta) {
+    return (meta.a.z & (1u << 30)) != 0u;
+}

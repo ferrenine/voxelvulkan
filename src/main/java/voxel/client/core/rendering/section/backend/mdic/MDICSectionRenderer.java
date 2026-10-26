@@ -61,10 +61,12 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     private static final int TRANSLUCENT_OFFSET = 400_000;//in draw calls
     /** Command-region capacities inside MDICViewport.drawCallBuffer. */
     public static final int OPAQUE_CAPACITY = TRANSLUCENT_OFFSET;
+    public static final int CUTOUT_CAPACITY = 100_000;
     public static final int TRANSLUCENT_CAPACITY = 100_000;
     /** Translucent-section id slots in distanceCountBuffer (one id per section). */
     public static final int TRANSLUCENT_ID_CAPACITY = 100_000;
     private static final int STATISTICS_BUFFER_BINDING = 8;
+    private static final int CUTOUT_DRAW_BUFFER_BINDING = 10;
     /** count, instanceCount, firstIndex, vertexOffset, firstInstance. */
     private static final int INDIRECT_COMMAND_SIZE = 5*4;
 
@@ -89,6 +91,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     }
 
     private final AutoBindingShader terrainShader;
+    private final AutoBindingShader cutoutTerrainShader;
     private final AutoBindingShader translucentTerrainShader;
     private final AutoBindingShader shadowCasterShader;
 
@@ -96,6 +99,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             .define("CMDGEN_WORKGROUP_SIZE", CMDGEN_WORKGROUP_SIZE)
             .define("TRANSLUCENT_WRITE_BASE", 1024)
             .define("OPAQUE_CAPACITY", OPAQUE_CAPACITY)
+            .define("CUTOUT_CAPACITY", CUTOUT_CAPACITY)
             .define("TRANSLUCENT_ID_CAPACITY", TRANSLUCENT_ID_CAPACITY)
 
             .define("TRANSLUCENT_DISTANCE_BUFFER_BINDING", 7)
@@ -173,7 +177,12 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         opaqueFrag = opaqueFrag==null?frag:opaqueFrag;
 
         //TODO: find a more robust/nicer way todo this
-        this.terrainShader = tryCompilePatchedOrNormal(builder, opaqueFrag, frag);
+        // Fully opaque sections never alpha-test; sections with cutout/non-full
+        // models use the regular shader. The command generator routes them into
+        // separate indirect draw lists.
+        this.terrainShader = tryCompilePatchedOrNormal(
+                builder.clone().define("NO_CUTOUT", 1), opaqueFrag, frag);
+        this.cutoutTerrainShader = tryCompilePatchedOrNormal(builder, opaqueFrag, frag);
 
         String translucentFrag = pipeline.patchTranslucentShader(this, frag);
         translucentFrag = translucentFrag==null?frag:translucentFrag;
@@ -258,19 +267,19 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         shader.indexBuffer(SharedIndexBuffer.INSTANCE.id(), Shader.INDEX_TYPE_UINT32);
     }
 
-    private void renderTerrain(MDICViewport viewport, long indirectOffset, long drawCountOffset, int maxDrawCount) {
+    private void renderTerrain(MDICViewport viewport, AutoBindingShader shader, VkBuffer drawBuffer,
+                               long indirectOffset, long drawCountOffset, int maxDrawCount) {
         VkState.setCullFace(false);
         VkState.setBlend(false);
         VkState.setDepthTest(true);
 
-        this.pipeline.setupAndBindOpaque(viewport);
-        this.bindRenderingBuffers(this.terrainShader, viewport);
+        this.bindRenderingBuffers(shader, viewport);
 
         boolean wireframe = VoxelClient.getOcclusionDebugState()==3;
         if (wireframe) {
             VkState.setPolygonMode(true);
         }
-        this.terrainShader.drawIndexedIndirectCount(viewport.drawCallBuffer, indirectOffset,
+        shader.drawIndexedIndirectCount(drawBuffer, indirectOffset,
                 viewport.drawCountCallBuffer, drawCountOffset, clampMaxDrawCount(maxDrawCount), INDIRECT_COMMAND_SIZE);
         if (wireframe) {
             VkState.setPolygonMode(false);
@@ -284,8 +293,15 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         if (this.geometryManager.getSectionCount() == 0) return;
 
         this.uploadUniformBuffer(viewport);
+        this.pipeline.setupAndBindOpaque(viewport);
 
-        this.renderTerrain(viewport, 0, 4*3, Math.min((int)(this.geometryManager.getSectionCount()*4.4+128), OPAQUE_CAPACITY));
+        int maxDraws = Math.min((int)(this.geometryManager.getSectionCount()*4.4+128), OPAQUE_CAPACITY);
+        this.renderTerrain(viewport, this.terrainShader, viewport.drawCallBuffer,
+                0, 4*3, maxDraws);
+
+        int maxCutoutDraws = Math.min((int)(this.geometryManager.getSectionCount()*4.4+128), CUTOUT_CAPACITY);
+        this.renderTerrain(viewport, this.cutoutTerrainShader, viewport.cutoutDrawCallBuffer,
+                0, 4*5, maxCutoutDraws);
     }
 
     @Override
@@ -334,6 +350,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             this.commandGenShader.ssbo(5, viewport.indirectLookupBuffer);
             this.commandGenShader.ssbo(6, viewport.positionScratchBuffer);
             this.commandGenShader.ssbo(7, this.distanceCountBuffer);
+            this.commandGenShader.ssbo(CUTOUT_DRAW_BUFFER_BINDING, viewport.cutoutDrawCallBuffer);
             this.commandGenShader.texture(9, 0, viewport.hiZBuffer.getHizTexture());
 
             if (RenderStatistics.enabled) {
@@ -379,7 +396,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
     @Override
     public void renderShadowCasters(MDICViewport viewport, Matrix4fc lightSpace,
-                                    double cameraX, double cameraY, double cameraZ) {
+                                    double cameraX, double cameraY, double cameraZ,
+                                    float minCasterDistance) {
         if (this.geometryManager.getSectionCount() == 0) return;
 
         //This frame's camera, same base section convention as Viewport
@@ -419,7 +437,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         shader.pushMat4(0, mvp)
                 .pushUint(64, bx).pushUint(68, by).pushUint(72, bz).pushUint(76, 0)
                 .pushFloat4(80, sx, sy, sz, 0.0f)
-                .pushFloat4(96, BerylUtil.getShadowDistortion(), lightPerBlock, 0.0f, 0.0f);
+                .pushFloat4(96, BerylUtil.getShadowDistortion(), lightPerBlock,
+                        minCasterDistance, 0.0f);
 
         //The opaque list this frame's main pass is about to draw (built last frame)
         shader.drawIndexedIndirectCount(viewport.drawCallBuffer, 0,
@@ -448,6 +467,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         this.distanceCountBuffer.free();
         this.translucentTerrainShader.free();
         this.terrainShader.free();
+        this.cutoutTerrainShader.free();
         this.shadowCasterShader.free();
         this.commandGenShader.free();
         this.prepShader.free();
