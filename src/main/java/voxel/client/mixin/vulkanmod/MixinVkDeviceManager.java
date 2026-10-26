@@ -90,7 +90,10 @@ public class MixinVkDeviceManager {
                 .pNext(available12.address());
         vkGetPhysicalDeviceFeatures2(DeviceManager.physicalDevice, features2);
         boolean drawIndirectCount = available12.drawIndirectCount();
+        boolean hostQueryReset = available12.hostQueryReset();
         boolean shaderDrawParameters = available11.shaderDrawParameters();
+        voxel.client.vk.VkVoxel.setDrawIndirectCountSupported(drawIndirectCount);
+        voxel.client.vk.VkVoxel.setHostQueryResetSupported(hostQueryReset);
 
         long pNext = createInfo.pNext();
         long vk11Address = 0L;
@@ -117,9 +120,18 @@ public class MixinVkDeviceManager {
             if (drawIndirectCount) {
                 vk12.drawIndirectCount(true);
             }
+            if (hostQueryReset) {
+                vk12.hostQueryReset(true);
+            }
             createInfo.pNext(vk12);
-        } else if (drawIndirectCount) {
-            VkPhysicalDeviceVulkan12Features.create(vk12Address).drawIndirectCount(true);
+        } else {
+            VkPhysicalDeviceVulkan12Features vk12 = VkPhysicalDeviceVulkan12Features.create(vk12Address);
+            if (drawIndirectCount) {
+                vk12.drawIndirectCount(true);
+            }
+            if (hostQueryReset) {
+                vk12.hostQueryReset(true);
+            }
         }
 
         return createInfo;

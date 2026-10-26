@@ -15,6 +15,8 @@ import net.minecraft.world.level.block.state.BlockState;
 import org.lwjgl.system.MemoryUtil;
 
 import java.util.Arrays;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 
 
 public class RenderDataFactory {
@@ -28,6 +30,7 @@ public class RenderDataFactory {
     private static final boolean DISABLE_CULL_SAME_OCCLUDES = false;
 
     private static final boolean VERIFY_MESHING = VoxelCommon.isVerificationFlagOn("verifyMeshing");
+    private static final VarHandle LONG_ARRAY_ELEMENTS = MethodHandles.arrayElementVarHandle(long[].class);
 
     //TODO: MAKE a render cache that caches each WorldSection directional face generation, cause then can just pull that directly
     // instead of needing to regen the entire thing
@@ -41,6 +44,9 @@ public class RenderDataFactory {
     private final ModelFactory modelMan;
 
     //private final long[] sectionData = new long[32*32*32*2];
+    //Per-worker snapshot: the mesher must not read the live section array while
+    //ingest can swap/recycle it (and must not see a half-written update).
+    private final long[] rawSnapshot = new long[WorldSection.SECTION_VOLUME];
     private final long[] sectionData = new long[32*32*32*2];
     private final long[] neighboringFaces = new long[32*32*6];
     // Per-cell lava own height (1..255 units of one block; 0 = not lava).
@@ -70,6 +76,18 @@ public class RenderDataFactory {
     private final MemoryBuffer lightAOBuffer = new MemoryBuffer(8*(8*(1<<16)));
     private final long lightAOBufferPtr = this.lightAOBuffer.address;
     private final int[] quadCounters = new int[8];
+
+    // The section metadata packs each bucket's count into a 16-bit delta, so
+    // 65,535 is the largest encodable count (65,536 wraps to 0). The scratch
+    // buffer still has 65,536 slots; the last one is deliberately unused.
+    private static final int MAX_QUADS_PER_BUCKET = (1 << 16) - 1;
+    private static final java.util.concurrent.atomic.AtomicLong QUAD_OVERFLOW_TOTAL =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong LARGE_SECTION_QUAD_COUNT =
+            new java.util.concurrent.atomic.AtomicLong();
+    private long sectionOverflowCount;
+    private long meshSectionKey;
+    private long lastOverflowLogNanos;
 
 
     private int minX;
@@ -115,8 +133,6 @@ public class RenderDataFactory {
                     throw new IllegalStateException("dim out of bounds: " + (x-(length-1))+", " + (z-(width-1)));
                 }
             }
-
-            RenderDataFactory.this.quadCount++;
 
             x -= length-1;
             z -= width-1;
@@ -200,7 +216,6 @@ public class RenderDataFactory {
                     int shiftAmount = axis == 0 ? 16 : (axis == 1 ? 11 : 21);
                     long stepData = (data & ~(0xFFFFL << 26)) | (Integer.toUnsignedLong(stepModelId) << 26);
                     long stepLightAO = openLightAO((int) ((stepData >>> 55) & 0xFFL));
-                    boolean first = true;
                     for (int dx = 0; dx < length; dx++) {
                         for (int dz = 0; dz < width; dz++) {
                             int encPos = face;
@@ -209,18 +224,17 @@ public class RenderDataFactory {
                             encPos |= auxPos << shiftAmount;
                             long uEncPos = Integer.toUnsignedLong(encPos);
 
-                            if (!first) {
-                                RenderDataFactory.this.quadCount++;
+                            // A stair-step cell emits two quads; reserve both so
+                            // a full bucket cannot leave half a step behind.
+                            int qi = RenderDataFactory.this.allocQuads(bufferIdx, 2);
+                            if (qi < 0) {
+                                continue;
                             }
-                            first = false;
-                            int qi1 = RenderDataFactory.this.quadCounters[bufferIdx]++;
-                            long off1 = qi1 * 8L + bufferIdx * 8L * (1 << 16);
+                            long off1 = qi * 8L + bufferIdx * 8L * (1 << 16);
                             MemoryUtil.memPutLong(RenderDataFactory.this.quadBufferPtr + off1, data | uEncPos);
                             MemoryUtil.memPutLong(RenderDataFactory.this.lightAOBufferPtr + off1, stepLightAO);
 
-                            RenderDataFactory.this.quadCount++;
-                            int qi2 = RenderDataFactory.this.quadCounters[bufferIdx]++;
-                            long off2 = qi2 * 8L + bufferIdx * 8L * (1 << 16);
+                            long off2 = (qi + 1) * 8L + bufferIdx * 8L * (1 << 16);
                             MemoryUtil.memPutLong(RenderDataFactory.this.quadBufferPtr + off2, stepData | uEncPos);
                             MemoryUtil.memPutLong(RenderDataFactory.this.lightAOBufferPtr + off2, stepLightAO);
                         }
@@ -288,10 +302,13 @@ public class RenderDataFactory {
             }
 
             if (split) {
-                RenderDataFactory.this.quadCount += length * width - 1;
                 int bufferIdx = type+(type==2?face:0);
                 for (int dx = 0; dx < length; dx++) {
                     for (int dz = 0; dz < width; dz++) {
+                        int qi = RenderDataFactory.this.allocQuads(bufferIdx, 1);
+                        if (qi < 0) {
+                            continue;
+                        }
                         int qx = x + dx;
                         int qz = z + dz;
                         int encPos = face;
@@ -312,7 +329,6 @@ public class RenderDataFactory {
                                 }
                             }
                         }
-                        int qi = RenderDataFactory.this.quadCounters[bufferIdx]++;
                         long off = qi*8L + bufferIdx*8L*(1<<16);
                         MemoryUtil.memPutLong(RenderDataFactory.this.quadBufferPtr + off, splitQuad);
                         MemoryUtil.memPutLong(RenderDataFactory.this.lightAOBufferPtr + off, splitLight);
@@ -333,7 +349,10 @@ public class RenderDataFactory {
                 }
 
                 int bufferIdx = type+(type==2?face:0);//Translucent, double side, directional
-                int quadIdx = RenderDataFactory.this.quadCounters[bufferIdx]++;
+                int quadIdx = RenderDataFactory.this.allocQuads(bufferIdx, 1);
+                if (quadIdx < 0) {
+                    return;
+                }
                 long bufferOffset = quadIdx*8L + bufferIdx*8L*(1<<16);
                 MemoryUtil.memPutLong(RenderDataFactory.this.quadBufferPtr + bufferOffset, quad);
                 MemoryUtil.memPutLong(RenderDataFactory.this.lightAOBufferPtr + bufferOffset, lightAO);
@@ -651,7 +670,6 @@ public class RenderDataFactory {
 
     private int prepareSectionData(final long[] rawSectionData) {
         final var sectionData = this.sectionData;
-        final var rawModelIds = this.modelMan._unsafeRawAccess();
         Arrays.fill(this.fluidOwnHeight, (byte) 0);
         long opaque = 0;
         long notEmpty = 0;
@@ -695,7 +713,7 @@ public class RenderDataFactory {
                     sectionData[i * 2] |= 0xFL << 55;//direct sky exposure = sky 15 by definition
                 }
             } else {
-                int modelId = rawModelIds[Mapper.getBlockId(block)];
+                int modelId = this.modelMan.getModelIdAcquire(Mapper.getBlockId(block));
                 if (modelId == -1) {//Failed, so just return error
                     return Mapper.getBlockId(block)|(1<<31);
                 }
@@ -828,7 +846,7 @@ public class RenderDataFactory {
         if (blockId <= 0) {
             return false;
         }
-        int mid = this.modelMan._unsafeRawAccess()[blockId];
+        int mid = this.modelMan.getModelIdAcquire(blockId);
         if (mid > 0) {
             return ModelQueries.isLava(this.modelMan.getModelMetadataFromClientId(mid));
         }
@@ -1046,25 +1064,27 @@ public class RenderDataFactory {
             return;
         }
         try {
-            long[] aboveRaw = above._unsafeGetRawDataArray();
-            for (int z = 0; z < 32; z++) {
-                for (int x = 0; x < 32; x++) {
-                    if (!this.isColumnEmpty(x, z)) {
-                        continue;
-                    }
-                    boolean covered = false;
-                    for (int y = 0; y < 32; y++) {
-                        if (!Mapper.isAir(aboveRaw[(y << 10) | (z << 5) | x])) {
-                            covered = true;
-                            break;
+            synchronized (above) {
+                long[] aboveRaw = above._unsafeGetRawDataArray();
+                for (int z = 0; z < 32; z++) {
+                    for (int x = 0; x < 32; x++) {
+                        if (!this.isColumnEmpty(x, z)) {
+                            continue;
                         }
-                    }
-                    if (covered) {
-                        continue;
-                    }
-                    for (int y = 0; y < 32; y++) {
-                        int i2 = ((y << 10) | (z << 5) | x) << 1;
-                        this.sectionData[i2] |= 0xFL << 55;
+                        boolean covered = false;
+                        for (int y = 0; y < 32; y++) {
+                            if (!Mapper.isAir(aboveRaw[(y << 10) | (z << 5) | x])) {
+                                covered = true;
+                                break;
+                            }
+                        }
+                        if (covered) {
+                            continue;
+                        }
+                        for (int y = 0; y < 32; y++) {
+                            int i2 = ((y << 10) | (z << 5) | x) << 1;
+                            this.sectionData[i2] |= 0xFL << 55;
+                        }
                     }
                 }
             }
@@ -1195,18 +1215,29 @@ public class RenderDataFactory {
             return;
         }
         final long[] data = this.sectionData;
-        long[] raw = section._unsafeGetRawDataArray();//may be the shared air array
-        for (int i = 0; i < 32 * 32 * 32; i++) {
-            int s = (int) ((data[i << 1] >>> 55) & 0xFL);
-            if (s <= 0) {
-                continue;
+        // The section lock keeps setToSharedAir()/materializeData() from
+        // swapping or recycling the array while we merge into it. WorldUpdater
+        // writes individual elements without this lock, so each update below is
+        // a CAS on the element: if the block/biome bits changed between the read
+        // and the write, retry with the new value instead of restoring the old
+        // ones. The repaired light is a recomputable lower bound, so dropping an
+        // update when the array is replaced is acceptable.
+        synchronized (section) {
+            long[] raw = section._unsafeGetRawDataArray();
+            for (int i = 0; i < 32 * 32 * 32; i++) {
+                int s = (int) ((data[i << 1] >>> 55) & 0xFL);
+                if (s <= 0) {
+                    continue;
+                }
+                long r = raw[i];
+                while (((r >>> 56) & 0xFL) < s) {
+                    long next = (r & ~(0xFL << 56)) | ((long) s << 56);
+                    if (LONG_ARRAY_ELEMENTS.compareAndSet(raw, i, r, next)) {
+                        break;
+                    }
+                    r = raw[i];
+                }
             }
-            long r = raw[i];
-            if (((r >>> 56) & 0xFL) >= s) {
-                continue;
-            }
-            raw = section.materializeData();//first actual write: swap shared→private (SHARED_AIR copied in)
-            raw[i] = (r & ~(0xFL << 56)) | ((long) s << 56);
         }
     }
 
@@ -1217,57 +1248,63 @@ public class RenderDataFactory {
         // calls + strided reads, not the memcpy.
         if ((msk&1)!=0) {//-x
             var sec = this.world.acquire(section.lvl, section.x - 1, section.y, section.z);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i] = raw[(i<<5)+31];//pull the +x faces from the section
+            synchronized (sec) {
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i] = raw[(i<<5)+31];//pull the +x faces from the section
+                }
             }
             sec.release();
         }
         if ((msk&2)!=0) {//+x
             var sec = this.world.acquire(section.lvl, section.x + 1, section.y, section.z);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i+32*32] = raw[(i<<5)];//pull the -x faces from the section
+            synchronized (sec) {
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i+32*32] = raw[(i<<5)];//pull the -x faces from the section
+                }
             }
             sec.release();
         }
 
         if ((msk&4)!=0) {//-y
             var sec = this.world.acquire(section.lvl, section.x, section.y - 1, section.z);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i+32*32*2] = raw[i|(0x1F<<10)];//pull the +y faces from the section
+            synchronized (sec) {
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i+32*32*2] = raw[i|(0x1F<<10)];//pull the +y faces from the section
+                }
             }
             sec.release();
         }
         if ((msk&8)!=0) {//+y
             var sec = this.world.acquire(section.lvl, section.x, section.y + 1, section.z);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i+32*32*3] = raw[i];//pull the -y faces from the section
+            synchronized (sec) {
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i+32*32*3] = raw[i];//pull the -y faces from the section
+                }
             }
             sec.release();
         }
 
         if ((msk&16)!=0) {//-z
             var sec = this.world.acquire(section.lvl, section.x, section.y, section.z - 1);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i+32*32*4] = raw[Integer.expand(i,0b11111_00000_11111)|(0x1F<<5)];//pull the +z faces from the section
+            synchronized (sec) {
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i+32*32*4] = raw[Integer.expand(i,0b11111_00000_11111)|(0x1F<<5)];//pull the +z faces from the section
+                }
             }
             sec.release();
         }
         if ((msk&32)!=0) {//+z
             var sec = this.world.acquire(section.lvl, section.x, section.y, section.z + 1);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i+32*32*5] = raw[Integer.expand(i,0b11111_00000_11111)];//pull the -z faces from the section
+            synchronized (sec) {
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i+32*32*5] = raw[Integer.expand(i,0b11111_00000_11111)];//pull the -z faces from the section
+                }
             }
             sec.release();
         }
@@ -1292,7 +1329,7 @@ public class RenderDataFactory {
         }
     }
 
-    private boolean isShadowCasterVoxel(WorldSection section, int rx, int ry, int rz, int[] rawModelIds) {
+    private boolean isShadowCasterVoxel(WorldSection section, int rx, int ry, int rz) {
         if ((rx | ry | rz) >= 0 && rx < 32 && ry < 32 && rz < 32) {
             return (this.shadowCasterMasks[(ry << 5) | rz] & (1 << rx)) != 0;
         }
@@ -1308,7 +1345,7 @@ public class RenderDataFactory {
         }
         long nBlock = nSec._unsafeGetRawDataArray()[((ry & 31) << 10) | ((rz & 31) << 5) | (rx & 31)];
         if (!Mapper.isAir(nBlock)) {
-            int mId = rawModelIds[Mapper.getBlockId(nBlock)];
+            int mId = this.modelMan.getModelIdAcquire(Mapper.getBlockId(nBlock));
             if (mId > 0) {
                 long mMeta = this.modelMan.getModelMetadataFromClientId(mId);
                 boolean hasFullVert = (mMeta & 0x0000020202020000L) != 0L;
@@ -1319,7 +1356,6 @@ public class RenderDataFactory {
     }
 
     private boolean traceSunRay(WorldSection section, int startVoxelX, int startVoxelY, int startVoxelZ, float lx, float ly, float lz) {
-        final int[] rawModelIds = this.modelMan._unsafeRawAccess();
         float ox = startVoxelX + 0.5f;
         float oy = startVoxelY + 0.5f;
         float oz = startVoxelZ + 0.5f;
@@ -1358,10 +1394,10 @@ public class RenderDataFactory {
             int rx1 = (int) Math.floor(fx + 0.32f);
             int rz0 = (int) Math.floor(fz - 0.32f);
             int rz1 = (int) Math.floor(fz + 0.32f);
-            if (this.isShadowCasterVoxel(section, rx0, ry, rz0, rawModelIds)) {
+            if (this.isShadowCasterVoxel(section, rx0, ry, rz0)) {
                 return true;
             }
-            if ((rx1 != rx0 || rz1 != rz0) && this.isShadowCasterVoxel(section, rx1, ry, rz1, rawModelIds)) {
+            if ((rx1 != rx0 || rz1 != rz0) && this.isShadowCasterVoxel(section, rx1, ry, rz1)) {
                 return true;
             }
         }
@@ -2756,8 +2792,40 @@ public class RenderDataFactory {
         }
     }
 
+    /**
+     * Reserves {@code count} consecutive quad slots in {@code bucket}, or
+     * returns -1 when the bucket is full. Keeps Voxy's 8 x 65536 layout and
+     * 16-bit metadata encoding; the only deviation is that an overflow quad is
+     * dropped instead of overwriting the next bucket or wrapping the count.
+     */
+    private int allocQuads(int bucket, int count) {
+        int base = this.quadCounters[bucket];
+        if (base + count > MAX_QUADS_PER_BUCKET) {
+            this.sectionOverflowCount += count;
+            QUAD_OVERFLOW_TOTAL.addAndGet(count);
+            long now = System.nanoTime();
+            if (now - this.lastOverflowLogNanos > 1_000_000_000L) {
+                this.lastOverflowLogNanos = now;
+                Logger.warn("Section " + WorldEngine.pprintPos(this.meshSectionKey)
+                        + " quad bucket " + bucket + " reached its 16-bit limit; dropping "
+                        + count + " quad(s) (total dropped in this section: "
+                        + this.sectionOverflowCount + ")");
+            }
+            return -1;
+        }
+        this.quadCounters[bucket] = base + count;
+        this.quadCount += count;
+        return base;
+    }
+
+    /** Quads dropped because a 16-bit bucket was full, across all workers. */
+    public static long getQuadOverflowTotal() {
+        return QUAD_OVERFLOW_TOTAL.get();
+    }
+
     //section is already acquired and gets released by the parent
     public BuiltSection generateMesh(WorldSection section) {
+        this.meshSectionKey = section.key;
         // The mesher needs to know the LOD level: at coarser levels one cell
         // represents 2^lvl blocks, so its shell must be lit by the cell's own
         // (mip-averaged) light instead of the open air in front of it.
@@ -2772,6 +2840,7 @@ public class RenderDataFactory {
         //We must reset _everything_ that could have changed as we dont exactly know the state due to how the model id exception
         // throwing system works
         this.quadCount = 0;
+        this.sectionOverflowCount = 0;
 
         {//Reset all the block meshes
             this.blockMesher.reset();
@@ -2803,8 +2872,15 @@ public class RenderDataFactory {
         Arrays.fill(this.fluidMasks, 0);
         Arrays.fill(this.shadowCasterMasks, 0);
 
-        //Prepare everything
-        int neighborMskAndFlags = this.prepareSectionData(section._unsafeGetRawDataArray());
+        //Prepare everything. Take a consistent snapshot first: ingest may be
+        //writing this section (or setToSharedAir may be recycling its array)
+        //while the mesh runs. One 256KB copy per mesh is cheap next to the
+        //quad generation and removes the torn-snapshot window entirely.
+        final long[] rawSnapshot = this.rawSnapshot;
+        synchronized (section) {
+            System.arraycopy(section._unsafeGetRawDataArray(), 0, rawSnapshot, 0, WorldSection.SECTION_VOLUME);
+        }
+        int neighborMskAndFlags = this.prepareSectionData(rawSnapshot);
         if ((neighborMskAndFlags&(1<<31))!=0) {//We failed to get everything so throw exception
             throw new IdNotYetComputedException(neighborMskAndFlags&((1<<20)-1), true);
         }
@@ -2843,7 +2919,14 @@ public class RenderDataFactory {
         }
 
         if (this.quadCount >= 1<<16) {
-            Logger.warn("Large quad count for section " + WorldEngine.pprintPos(section.key) + " is " + this.quadCount);
+            // Dense LOD0 forest sections legitimately exceed 65k quads across
+            // their 8 buckets. Logging every one of them (thousands during a
+            // world load) stalls the meshers on synchronous log I/O.
+            long n = LARGE_SECTION_QUAD_COUNT.incrementAndGet();
+            if ((n & 1023L) == 1L) {
+                Logger.warn("Sections with >65,536 quads: " + n + " (latest "
+                        + WorldEngine.pprintPos(section.key) + " = " + this.quadCount + ")");
+            }
         }
 
         if (this.minX<0 || this.minY<0 || this.minZ<0 || 32<this.maxX || 32<this.maxY || 32<this.maxZ) {

@@ -19,10 +19,21 @@ public class ModelBakerySubsystem {
 
     private final Thread processingThread;
     private volatile boolean isRunning = true;
+    private boolean started;
+    private boolean freed;
 
     public ModelBakerySubsystem(Mapper mapper) {
         this.mapper = mapper;
-        this.factory = new ModelFactory(mapper, this.storage);
+        final ModelFactory factory;
+        try {
+            factory = new ModelFactory(mapper, this.storage);
+        } catch (RuntimeException | Error e) {
+            // The renderer constructor never receives this object, so free the
+            // partially built store here instead of leaking its GPU buffers.
+            this.storage.free();
+            throw e;
+        }
+        this.factory = factory;
         this.processingThread = new Thread(()->{
             while (this.isRunning) {
                 this.factory.processAllThings();
@@ -35,6 +46,18 @@ public class ModelBakerySubsystem {
         }, "Model factory processor");
         this.processingThread.setDaemon(true);
         this.processingThread.setPriority(Thread.NORM_PRIORITY - 1);
+    }
+
+    /**
+     * Starts the bake worker. Called only after the owning renderer finished
+     * all of its allocations and shader compilation, so a failed construction
+     * cannot leave this thread running against a released world.
+     */
+    public void start() {
+        if (this.started || this.freed) {
+            return;
+        }
+        this.started = true;
         this.processingThread.start();
     }
 
@@ -97,14 +120,24 @@ public class ModelBakerySubsystem {
 
     public void shutdown() {
         this.isRunning = false;
-        try {
-            this.processingThread.join();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+        if (this.started) {
+            try {
+                this.processingThread.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
         }
 
-        this.factory.free();
-        this.storage.free();
+        if (this.freed) {
+            return;
+        }
+        this.freed = true;
+        try {
+            this.factory.free();
+        } finally {
+            this.storage.free();
+        }
     }
 
     private final ReentrantLock seenIdsLock = new ReentrantLock();

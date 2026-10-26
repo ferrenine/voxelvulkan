@@ -4,6 +4,7 @@ import voxel.client.core.vk.VkBuffer;
 import voxel.client.core.vk.shader.AutoBindingShader;
 import voxel.client.core.vk.shader.Shader;
 import voxel.client.core.vk.shader.ShaderType;
+import voxel.client.core.rendering.util.SharedIndexBuffer;
 import voxel.client.core.rendering.util.UploadStream;
 import voxel.client.vk.VkVoxel;
 import net.vulkanmod.vulkan.texture.VulkanImage;
@@ -22,19 +23,24 @@ public class BudgetBufferRenderer {
     public static void init() {
     }
 
+    private static boolean quadOverflowLogged;
+
+    // The bakery has its own index order (0,1,2 / 2,3,0) and its own vertex
+    // layout; do not share the terrain index buffer, whose provoking vertex is
+    // deliberately 1 for quads3.vert's flat attributes.
     private static final VkBuffer indexBuffer;
     static {
-        final int maxQuads = 4096;
-        indexBuffer = new VkBuffer(maxQuads * 6L * 2L);
+        final int maxQuads = SharedIndexBuffer.MAX_QUADS;
+        indexBuffer = new VkBuffer((long) maxQuads * 6L * 4L);
         long ptr = UploadStream.INSTANCE.upload(indexBuffer, 0, indexBuffer.size());
         for (int i = 0; i < maxQuads; i++) {
             int base = i * 4;
-            MemoryUtil.memPutShort(ptr, (short) (base + 0)); ptr += 2;
-            MemoryUtil.memPutShort(ptr, (short) (base + 1)); ptr += 2;
-            MemoryUtil.memPutShort(ptr, (short) (base + 2)); ptr += 2;
-            MemoryUtil.memPutShort(ptr, (short) (base + 2)); ptr += 2;
-            MemoryUtil.memPutShort(ptr, (short) (base + 3)); ptr += 2;
-            MemoryUtil.memPutShort(ptr, (short) (base + 0)); ptr += 2;
+            MemoryUtil.memPutInt(ptr, base + 0); ptr += 4;
+            MemoryUtil.memPutInt(ptr, base + 1); ptr += 4;
+            MemoryUtil.memPutInt(ptr, base + 2); ptr += 4;
+            MemoryUtil.memPutInt(ptr, base + 2); ptr += 4;
+            MemoryUtil.memPutInt(ptr, base + 3); ptr += 4;
+            MemoryUtil.memPutInt(ptr, base + 0); ptr += 4;
         }
         UploadStream.INSTANCE.commit();
     }
@@ -47,6 +53,15 @@ public class BudgetBufferRenderer {
     public static void setup(long dataPtr, int quads, VulkanImage tex) {
         if (quads == 0) {
             throw new IllegalStateException();
+        }
+        if (quads > SharedIndexBuffer.MAX_QUADS) {
+            if (!quadOverflowLogged) {
+                quadOverflowLogged = true;
+                voxel.common.Logger.error("Model bake produced " + quads
+                        + " quads, more than the shared index buffer supports ("
+                        + SharedIndexBuffer.MAX_QUADS + "); truncating the model");
+            }
+            quads = SharedIndexBuffer.MAX_QUADS;
         }
 
         quadCount = quads;
@@ -72,7 +87,7 @@ public class BudgetBufferRenderer {
         bakeryShader
                 .image(0, tex)
                 .ssboRaw(1, immediateBuffer.id, writeOffset, size)
-                .indexBuffer(indexBuffer.id, Shader.INDEX_TYPE_UINT16);
+                .indexBuffer(indexBuffer.id, Shader.INDEX_TYPE_UINT32);
         tex.setSampler(prevSampler);
     }
 

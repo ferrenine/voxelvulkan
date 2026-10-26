@@ -49,6 +49,8 @@ public class VkTexture extends TrackedObject {
 
     private static int COUNT;
     private static long ESTIMATED_TOTAL_SIZE;
+    /** Estimated bytes this texture contributed to ESTIMATED_TOTAL_SIZE. */
+    private long estimatedSize;
 
     public VkTexture() {
         this(GL_TEXTURE_2D);
@@ -80,7 +82,19 @@ public class VkTexture extends TrackedObject {
         this.id = this.image.handle();
         this.ownsImage = true;
         this.hasAllocated = true;
-        ESTIMATED_TOTAL_SIZE += (long) width * height * Math.max(1, levels) * 4L;
+        if (this.estimatedSize != 0L) {
+            ESTIMATED_TOTAL_SIZE -= this.estimatedSize;
+        }
+        long estimated = 0L;
+        int mipWidth = width;
+        int mipHeight = height;
+        for (int level = 0; level < Math.max(1, levels); level++) {
+            estimated += (long) mipWidth * mipHeight * 4L;
+            mipWidth = Math.max(1, mipWidth >> 1);
+            mipHeight = Math.max(1, mipHeight >> 1);
+        }
+        this.estimatedSize = estimated;
+        ESTIMATED_TOTAL_SIZE += estimated;
         return this;
     }
 
@@ -225,17 +239,11 @@ public class VkTexture extends TrackedObject {
     public void free() {
         this.free0();
         if (this.customView != VK_NULL_HANDLE) {
-            try {
-                vkDestroyImageView(VkVoxel.device(), this.customView, null);
-            } catch (Throwable ignored) {
-            }
+            VkVoxel.destroyImageViewDeferred(this.customView);
             this.customView = VK_NULL_HANDLE;
         }
         if (this.srgbView != VK_NULL_HANDLE) {
-            try {
-                vkDestroyImageView(VkVoxel.device(), this.srgbView, null);
-            } catch (Throwable ignored) {
-            }
+            VkVoxel.destroyImageViewDeferred(this.srgbView);
             this.srgbView = VK_NULL_HANDLE;
         }
         if (this.image != null && this.ownsImage) {
@@ -243,6 +251,10 @@ public class VkTexture extends TrackedObject {
         }
         this.image = null;
         COUNT--;
+        if (this.estimatedSize != 0L) {
+            ESTIMATED_TOTAL_SIZE -= this.estimatedSize;
+            this.estimatedSize = 0L;
+        }
     }
 
     public VkTexture name(String name) {

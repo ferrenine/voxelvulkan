@@ -1,6 +1,7 @@
 package voxel.client;
 
 import voxel.client.core.vk.Capabilities;
+import voxel.client.config.VoxelModSettings;
 import voxel.client.core.model.bakery.BudgetBufferRenderer;
 import voxel.client.core.rendering.util.SharedIndexBuffer;
 import voxel.common.Logger;
@@ -20,6 +21,7 @@ public class VoxelClient implements ClientModInitializer {
     public void onInitializeClient() {
         VoxelKeyBindings.register();
         VoxelClientEvents.register();
+        VoxelModSettings.register();
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             dispatcher.register(VoxelCommands.register());

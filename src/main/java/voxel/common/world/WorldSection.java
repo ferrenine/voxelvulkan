@@ -30,6 +30,7 @@ public final class WorldSection {
     private static final VarHandle NON_EMPTY_BLOCK_HANDLE;
     private static final VarHandle IN_SAVE_QUEUE_HANDLE;
     private static final VarHandle IS_DIRTY_HANDLE;
+    private static final VarHandle DATA_HANDLE;
 
     static {
         try {
@@ -38,6 +39,7 @@ public final class WorldSection {
             NON_EMPTY_BLOCK_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "nonEmptyBlockCount", int.class);
             IN_SAVE_QUEUE_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "inSaveQueue", boolean.class);
             IS_DIRTY_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "isDirty", boolean.class);
+            DATA_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "data", long[].class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new RuntimeException(e);
         }
@@ -93,14 +95,13 @@ public final class WorldSection {
     }
 
     public long[] _unsafeGetRawDataArray() {
-        return this.data;
+        return (long[]) DATA_HANDLE.getVolatile(this);
     }
 
     /** Gives this section the shared all-air array; the previous array (if any)
      *  goes back to the reuse pool. Called instead of Arrays.fill on air. */
-    void setToSharedAir() {
-        long[] d = this.data;
-        this.data = SHARED_AIR_DATA;
+    synchronized void setToSharedAir() {
+        long[] d = (long[]) DATA_HANDLE.getAndSet(this, SHARED_AIR_DATA);
         if (d != null && d != SHARED_AIR_DATA && ARRAY_REUSE_CACHE_COUNT.get() < ARRAY_REUSE_CACHE_SIZE) {
             ARRAY_REUSE_CACHE.add(d);
             ARRAY_REUSE_CACHE_COUNT.incrementAndGet();
@@ -109,19 +110,27 @@ public final class WorldSection {
 
     /** Returns a private mutable data array — copies the shared air array if
      *  this section currently aliases it. All writers MUST call this first. */
-    public long[] materializeData() {
-        long[] d = this.data;
-        if (d == SHARED_AIR_DATA) {
-            d = ARRAY_REUSE_CACHE.poll();
-            if (d == null) {
-                d = new long[SECTION_VOLUME];
-            } else {
-                ARRAY_REUSE_CACHE_COUNT.decrementAndGet();
-            }
-            System.arraycopy(SHARED_AIR_DATA, 0, d, 0, SECTION_VOLUME);
-            this.data = d;
+    public synchronized long[] materializeData() {
+        long[] d = (long[]) DATA_HANDLE.getVolatile(this);
+        if (d != SHARED_AIR_DATA) {
+            return d;
         }
-        return d;
+        long[] copy = ARRAY_REUSE_CACHE.poll();
+        if (copy == null) {
+            copy = new long[SECTION_VOLUME];
+        } else {
+            ARRAY_REUSE_CACHE_COUNT.decrementAndGet();
+        }
+        System.arraycopy(SHARED_AIR_DATA, 0, copy, 0, SECTION_VOLUME);
+        if (DATA_HANDLE.compareAndSet(this, SHARED_AIR_DATA, copy)) {
+            return copy;
+        }
+        // Another writer materialized first: recycle our copy and use theirs.
+        if (ARRAY_REUSE_CACHE_COUNT.get() < ARRAY_REUSE_CACHE_SIZE) {
+            ARRAY_REUSE_CACHE.add(copy);
+            ARRAY_REUSE_CACHE_COUNT.incrementAndGet();
+        }
+        return (long[]) DATA_HANDLE.getVolatile(this);
     }
 
     @Override
@@ -212,11 +221,11 @@ public final class WorldSection {
         if (VERIFY_WORLD_SECTION_EXECUTION && this.data == null) {
             throw new IllegalStateException();
         }
-        if (this.data != SHARED_AIR_DATA && ARRAY_REUSE_CACHE_COUNT.get() < ARRAY_REUSE_CACHE_SIZE) {
-            ARRAY_REUSE_CACHE.add(this.data);
+        long[] d = (long[]) DATA_HANDLE.getAndSet(this, null);
+        if (d != null && d != SHARED_AIR_DATA && ARRAY_REUSE_CACHE_COUNT.get() < ARRAY_REUSE_CACHE_SIZE) {
+            ARRAY_REUSE_CACHE.add(d);
             ARRAY_REUSE_CACHE_COUNT.incrementAndGet();
         }
-        this.data = null;
     }
 
 

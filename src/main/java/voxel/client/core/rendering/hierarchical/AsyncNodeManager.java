@@ -62,10 +62,14 @@ public class AsyncNodeManager {
 
     private final NodeManager manager;
     private final BasicAsyncGeometryManager geometryManager;
+    private final RenderGenerationService renderService;
     private final IGeometryData geometryData;
     private final SectionUpdateRouter router;
 
-    private final GeometryCache geometryCache = new GeometryCache(1L<<32);//4GB CPU-side mesh cache (Voxy default)
+    // 8 GiB native: GeometryCache now counts geometry + lightAO, and the old
+    // accounting only counted geometry, so keeping 4 GiB here would halve the
+    // number of cached sections and cause constant remeshing/cache thrash.
+    private final GeometryCache geometryCache = new GeometryCache(8L<<30);
 
     private final AtomicInteger workCounter = new AtomicInteger();
 
@@ -87,6 +91,7 @@ public class AsyncNodeManager {
         // AsyncNodeManager will use an AsyncGeometryManager as the manager for the data store, and sync the results on the render thread
         this.geometryData = geometryData;
         this.geometryCapacity = ((BasicSectionGeometryData)geometryData).getGeometryCapacityBytes();
+        this.renderService = renderService;
 
         this.maxNodeCount = maxNodeCount;
 
@@ -109,6 +114,8 @@ public class AsyncNodeManager {
         this.router.setCallbacks(pos->{//On initial render gen, try get from geometry cache
             var cachedGeometry = this.geometryCache.remove(pos);
             if (cachedGeometry != null) {//Use the cached geometry
+                // The generation check below still applies: a dirty event that
+                // raced the cache lookup must not resurrect the old mesh.
                 this.submitGeometryResult(cachedGeometry);
             } else {//Else we need to request it
                 renderService.enqueueTask(pos);
@@ -653,6 +660,12 @@ public class AsyncNodeManager {
     private final LongOpenHashSet tlnAdd = new LongOpenHashSet();
     private final LongOpenHashSet tlnRem = new LongOpenHashSet();
 
+    /**
+     * Orders producer submissions against stop(): a submit either enqueues
+     * before stop() drains, or observes running == false and frees its payload.
+     */
+    private final Object submissionLock = new Object();
+
     private void addWork() {
         if (!this.running) throw new IllegalStateException("Not running");
         if (this.workCounter.getAndIncrement() == 0) {
@@ -661,35 +674,58 @@ public class AsyncNodeManager {
     }
 
     public void submitRequestBatch(MemoryBuffer batch) {//Only called from render thread
-        this.requestBatchQueue.add(batch);
-        this.addWork();
+        synchronized (this.submissionLock) {
+            if (!this.running) {
+                batch.free();
+                return;
+            }
+            this.requestBatchQueue.add(batch);
+            this.addWork();
+        }
     }
 
     private void submitChildChange(WorldSection section) {
-        if (!this.running) {
-            return;
+        synchronized (this.submissionLock) {
+            if (!this.running) {
+                return;
+            }
+            section.acquire();//We must acquire the section before putting in the queue
+            this.childUpdateQueue.add(section);
+            this.addWork();
         }
-        section.acquire();//We must acquire the section before putting in the queue
-        this.childUpdateQueue.add(section);
-        this.addWork();
     }
 
     private void submitGeometryResult(BuiltSection geometry) {
-        if (!this.running) {
-            geometry.free();
-            return;
+        synchronized (this.submissionLock) {
+            if (!this.running) {
+                geometry.free();
+                return;
+            }
+            // A newer dirty event may have produced a new build task while this
+            // (older) mesh was still being generated. Never let the stale mesh
+            // refill GeometryCache or reach NodeManager.
+            if (!this.renderService.isCurrentGeneration(geometry.position, geometry.generation)) {
+                geometry.free();
+                return;
+            }
+            //CPU-side copy so future requests for this position skip remeshing;
+            // invalidated via worldEvent() when the section (or a face neighbour)
+            // changes, and bounded by LRU size.
+            this.geometryCache.put(geometry.clone());
+            this.geometryUpdateQueue.add(geometry);
+            this.addWork();
         }
-        //CPU-side copy so future requests for this position skip remeshing;
-        // invalidated via worldEvent() when the section (or a face neighbour)
-        // changes, and bounded by LRU size.
-        this.geometryCache.put(geometry.clone());
-        this.geometryUpdateQueue.add(geometry);
-        this.addWork();
     }
 
     public void submitRemoveBatch(MemoryBuffer batch) {//Only called from render thread
-        this.removeBatchQueue.add(batch);
-        this.addWork();
+        synchronized (this.submissionLock) {
+            if (!this.running) {
+                batch.free();
+                return;
+            }
+            this.removeBatchQueue.add(batch);
+            this.addWork();
+        }
     }
 
     public void addTopLevel(long section) {//Only called from render thread
@@ -733,10 +769,12 @@ public class AsyncNodeManager {
     }
 
     public void stop() {
-        if (!this.running) {
-            throw new IllegalStateException();
+        synchronized (this.submissionLock) {
+            if (!this.running) {
+                throw new IllegalStateException();
+            }
+            this.running = false;
         }
-        this.running = false;
         LockSupport.unpark(this.thread);
         try {
             while (this.thread.isAlive()) {

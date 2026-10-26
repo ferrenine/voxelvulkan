@@ -79,14 +79,17 @@ public class DownloadStream {
             if (this.caddr == SIZE_LIMIT) {
                 Logger.warn("Download stream full, preemptively committing, this could cause bad things to happen");
                 this.commit();
-                int attempts = 10;
-                while (--attempts != 0 && this.caddr == SIZE_LIMIT) {
-                    VkVoxel.waitIdle();
-                    this.tick();
-                    this.caddr = this.allocationArena.alloc((int) size);
-                }
+                // One real drain is enough: all previously submitted download
+                // batches are complete after waitIdle. The batch recorded in the
+                // frame that is still recording must not be retired here.
+                VkVoxel.waitIdle();
+                this.tick();
+                this.caddr = this.allocationArena.alloc((int) size);
                 if (this.caddr == SIZE_LIMIT) {
-                    throw new IllegalStateException("Could not allocate memory segment big enough for upload even after force flush");
+                    throw new IllegalStateException("Could not allocate " + size
+                            + " bytes in the download stream even after waiting for the GPU; the"
+                            + " frame is using more readback memory than the " + this.downloadBuffer.size()
+                            + "-byte buffer");
                 }
             }
             this.thisFrameAllocations.add(this.caddr);
@@ -142,6 +145,18 @@ public class DownloadStream {
                 vkCmdCopyBuffer(cb, entry.target.id, this.downloadBuffer.id, region);
             }
         }
+        // The source buffers are often cleared/rewritten right after the download
+        // (e.g. the traversal request counter). Order the transfer reads before
+        // any later transfer/shader write, otherwise the fill can overtake the
+        // copy and the host reads stale data.
+        VkVoxel.memoryBarrier(cb,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                        | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                        | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                VK_ACCESS_TRANSFER_READ_BIT,
+                VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT
+                        | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
         // Host reads happen later; the destination is host-coherent so no further
         // barrier is required.
     }

@@ -60,9 +60,35 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     private static final int CMDGEN_WORKGROUP_SIZE = 64;
     private static final int TRANSLUCENT_OFFSET = 400_000;//in draw calls
     private static final int TEMPORAL_OFFSET = 500_000;//in draw calls
+    /** Command-region capacities inside MDICViewport.drawCallBuffer. */
+    public static final int OPAQUE_CAPACITY = TRANSLUCENT_OFFSET;
+    public static final int TRANSLUCENT_CAPACITY = TEMPORAL_OFFSET - TRANSLUCENT_OFFSET;
+    public static final int TEMPORAL_CAPACITY = 100_000;
+    /** Translucent-section id slots in distanceCountBuffer (one id per section). */
+    public static final int TRANSLUCENT_ID_CAPACITY = 100_000;
     private static final int STATISTICS_BUFFER_BINDING = 8;
     /** count, instanceCount, firstIndex, vertexOffset, firstInstance. */
     private static final int INDIRECT_COMMAND_SIZE = 5*4;
+
+    private static boolean maxDrawClampLogged;
+
+    /**
+     * vkCmdDrawIndexedIndirectCount requires maxDrawCount <= the device limit.
+     * cmdgen already clamps the count it writes, so lowering the read ceiling is
+     * safe (it only truncates work this device cannot express).
+     */
+    private static int clampMaxDrawCount(int requested) {
+        long limit = Capabilities.INSTANCE.maxDrawIndirectCount;
+        if (limit <= 0L || requested <= limit) {
+            return requested;
+        }
+        if (!maxDrawClampLogged) {
+            maxDrawClampLogged = true;
+            Logger.warn("Clamping maxDrawCount from " + requested + " to the device limit "
+                    + limit + " (maxDrawIndirectCount)");
+        }
+        return (int) Math.min(Integer.MAX_VALUE, limit);
+    }
 
     private final AutoBindingShader terrainShader;
     private final AutoBindingShader translucentTerrainShader;
@@ -72,6 +98,9 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             .define("CMDGEN_WORKGROUP_SIZE", CMDGEN_WORKGROUP_SIZE)
             .define("TRANSLUCENT_WRITE_BASE", 1024)
             .define("TEMPORAL_OFFSET", TEMPORAL_OFFSET)
+            .define("TEMPORAL_CAPACITY", TEMPORAL_CAPACITY)
+            .define("OPAQUE_CAPACITY", OPAQUE_CAPACITY)
+            .define("TRANSLUCENT_ID_CAPACITY", TRANSLUCENT_ID_CAPACITY)
 
             .define("TRANSLUCENT_DISTANCE_BUFFER_BINDING", 7)
 
@@ -89,16 +118,24 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             .compile();
 
     private final AutoBindingShader prefixSumShader = Shader.makeAuto()
-            //Use subgroup prefix sum if possible otherwise use dodgy... slow prefix sum
-            .add(ShaderType.COMPUTE, Capabilities.INSTANCE.subgroup?"voxel:util/prefixsum/inital3.comp":"voxel:util/prefixsum/simple.comp")
+            // inital3.comp has hard-coded 32/64-lane paths. Any other subgroup
+            // size must use the shared-memory scan, or the warp offsets are wrong.
+            .add(ShaderType.COMPUTE, useSubgroupPrefixSum()
+                    ? "voxel:util/prefixsum/inital3.comp" : "voxel:util/prefixsum/simple.comp")
             .define("IO_BUFFER", 0)
             .compile();
+
+    private static boolean useSubgroupPrefixSum() {
+        int size = Capabilities.INSTANCE.subgroupSize;
+        return Capabilities.INSTANCE.subgroup && (size == 32 || size == 64);
+    }
 
     private final AutoBindingShader translucentGenShader = Shader.makeAuto()
             .define("CMDGEN_WORKGROUP_SIZE", CMDGEN_WORKGROUP_SIZE)
             .define("TRANSLUCENT_WRITE_BASE", 1024)//The size of the prefix sum array
             .define("TRANSLUCENT_DISTANCE_BUFFER_BINDING", 5)
             .define("TRANSLUCENT_OFFSET", TRANSLUCENT_OFFSET)
+            .define("TRANSLUCENT_CAPACITY", TRANSLUCENT_CAPACITY)
             .defineIf("USE_SUBGROUPS", Capabilities.INSTANCE.subgroup)
             .add(ShaderType.COMPUTE, "voxel:lod/vk/buildtranslucents.comp")
             .compile();
@@ -109,7 +146,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     private boolean shadowDebugEnabled;
 
     //TODO: needs to be in the viewport, since it contains the compute indirect call/values
-    private final VkBuffer distanceCountBuffer = new VkBuffer(1024*4+100_000*4).zero();//TODO move to viewport?
+    private final VkBuffer distanceCountBuffer = new VkBuffer((1024L + TRANSLUCENT_ID_CAPACITY) * 4L).zero();//TODO move to viewport?
 
     //Statistics
     private final VkBuffer statisticsBuffer = new VkBuffer(1024).zero();
@@ -225,7 +262,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         VulkanImage shadowFallback = viewport.depthBoundingBuffer.getDepthTex().image().image;
         shader.imageSampled(11, shadowMap != null ? shadowMap : shadowFallback, shadowSampler);
 
-        shader.indexBuffer(SharedIndexBuffer.INSTANCE.id(), Shader.INDEX_TYPE_UINT16);
+        shader.indexBuffer(SharedIndexBuffer.INSTANCE.id(), Shader.INDEX_TYPE_UINT32);
     }
 
     private void renderTerrain(MDICViewport viewport, long indirectOffset, long drawCountOffset, int maxDrawCount) {
@@ -241,7 +278,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             VkState.setPolygonMode(true);
         }
         this.terrainShader.drawIndexedIndirectCount(viewport.drawCallBuffer, indirectOffset,
-                viewport.drawCountCallBuffer, drawCountOffset, maxDrawCount, INDIRECT_COMMAND_SIZE);
+                viewport.drawCountCallBuffer, drawCountOffset, clampMaxDrawCount(maxDrawCount), INDIRECT_COMMAND_SIZE);
         if (wireframe) {
             VkState.setPolygonMode(false);
         }
@@ -255,7 +292,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
         this.uploadUniformBuffer(viewport);
 
-        this.renderTerrain(viewport, 0, 4*3, Math.min((int)(this.geometryManager.getSectionCount()*4.4+128), 400_000));
+        this.renderTerrain(viewport, 0, 4*3, Math.min((int)(this.geometryManager.getSectionCount()*4.4+128), OPAQUE_CAPACITY));
     }
 
     @Override
@@ -273,7 +310,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         this.bindRenderingBuffers(this.translucentTerrainShader, viewport);
         this.pipeline.bindTranslucentSamplers(this.translucentTerrainShader, viewport);
         this.translucentTerrainShader.drawIndexedIndirectCount(viewport.drawCallBuffer, TRANSLUCENT_OFFSET*5L*4,
-                viewport.drawCountCallBuffer, 4*4, Math.min(this.geometryManager.getSectionCount(), 100_000),
+                viewport.drawCountCallBuffer, 4*4,
+                clampMaxDrawCount(Math.min(this.geometryManager.getSectionCount(), TRANSLUCENT_CAPACITY)),
                 INDIRECT_COMMAND_SIZE);
 
         VkState.setCullFace(true);
@@ -383,7 +421,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         }
         //Never the shadow map itself: it is the attachment being rendered
         shader.imageSampled(11, viewport.depthBoundingBuffer.getDepthTex().image().image, shadowSampler);
-        shader.indexBuffer(SharedIndexBuffer.INSTANCE.id(), Shader.INDEX_TYPE_UINT16);
+        shader.indexBuffer(SharedIndexBuffer.INSTANCE.id(), Shader.INDEX_TYPE_UINT32);
 
         shader.pushMat4(0, mvp)
                 .pushUint(64, bx).pushUint(68, by).pushUint(72, bz).pushUint(76, 0)
@@ -392,7 +430,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
         //The opaque list this frame's main pass is about to draw (built last frame)
         shader.drawIndexedIndirectCount(viewport.drawCallBuffer, 0,
-                viewport.drawCountCallBuffer, 4*3, Math.min((int)(this.geometryManager.getSectionCount()*4.4+128), 400_000),
+                viewport.drawCountCallBuffer, 4*3,
+                clampMaxDrawCount(Math.min((int)(this.geometryManager.getSectionCount()*4.4+128), OPAQUE_CAPACITY)),
                 INDIRECT_COMMAND_SIZE);
 
         //Beryl keeps drawing (entities) in this pass with VulkanMod's cached pipeline state
@@ -403,7 +442,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     public void renderTemporal(MDICViewport viewport) {
         if (!VoxelConfig.CONFIG.enableTemporalCatchup) return;
         if (this.geometryManager.getSectionCount() == 0) return;
-        int maxDraws = Math.min(this.geometryManager.getSectionCount(), 100_000);
+        int maxDraws = Math.min(this.geometryManager.getSectionCount(), TEMPORAL_CAPACITY);
         int cap = VoxelConfig.CONFIG.temporalCatchupMaxDraws;
         if (cap > 0) {
             maxDraws = Math.min(maxDraws, cap);

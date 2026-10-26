@@ -59,7 +59,7 @@ public class VkVoxelComputePipeline extends TrackedObject implements VkVoxelPipe
     private final Map<Integer, Integer> bindings = new LinkedHashMap<>();
     private final Map<Integer, BindingValue> values = new LinkedHashMap<>();
 
-    private static final int SETS_PER_FRAME = 64;
+    private static final int SETS_PER_FRAME = 256;
 
     private long shaderModule = VK_NULL_HANDLE;
     private long descriptorSetLayout = VK_NULL_HANDLE;
@@ -229,6 +229,10 @@ public class VkVoxelComputePipeline extends TrackedObject implements VkVoxelPipe
 
     private long resolveDescriptorSet() {
         int frame = VkVoxel.currentFrame();
+        if (frame < 0 || frame >= this.frameLastEpoch.length) {
+            throw new IllegalStateException("frame " + frame + " outside the descriptor pool (frames="
+                    + this.frameLastEpoch.length + ") for pipeline '" + this.name + "'");
+        }
         long epoch = VkVoxel.frameEpoch();
         int base = frame * SETS_PER_FRAME;
 
@@ -241,6 +245,9 @@ public class VkVoxelComputePipeline extends TrackedObject implements VkVoxelPipe
         int currentIdx = base + cursor;
 
         if (this.setVersion[currentIdx] == this.version) {
+            // Record the epoch even on a cache hit: the slot is live in this
+            // frame, so a later binding change must not treat it as free.
+            this.slotLastEpoch[currentIdx] = epoch;
             return this.descriptorSets[currentIdx];
         }
 
@@ -251,15 +258,28 @@ public class VkVoxelComputePipeline extends TrackedObject implements VkVoxelPipe
             return this.descriptorSets[currentIdx];
         }
 
-        cursor = (cursor + 1) % SETS_PER_FRAME;
-        this.frameCursor[frame] = cursor;
-        int nextIdx = base + cursor;
-        if (this.setVersion[nextIdx] != this.version) {
-            this.writeDescriptorSet(nextIdx);
-            this.setVersion[nextIdx] = this.version;
+        // The cursor slot is already referenced by a command recorded in this
+        // epoch. Find a slot with the same binding version or one that has not
+        // been used yet; never overwrite a live descriptor set.
+        for (int step = 1; step <= SETS_PER_FRAME; step++) {
+            int candidateCursor = (cursor + step) % SETS_PER_FRAME;
+            int candidate = base + candidateCursor;
+            if (this.setVersion[candidate] == this.version) {
+                this.frameCursor[frame] = candidateCursor;
+                this.slotLastEpoch[candidate] = epoch;
+                return this.descriptorSets[candidate];
+            }
+            if (this.slotLastEpoch[candidate] != epoch) {
+                this.writeDescriptorSet(candidate);
+                this.setVersion[candidate] = this.version;
+                this.slotLastEpoch[candidate] = epoch;
+                this.frameCursor[frame] = candidateCursor;
+                return this.descriptorSets[candidate];
+            }
         }
-        this.slotLastEpoch[nextIdx] = epoch;
-        return this.descriptorSets[nextIdx];
+        throw new IllegalStateException("Descriptor ring exhausted for pipeline '" + this.name
+                + "': more than " + SETS_PER_FRAME
+                + " distinct binding states in one frame (frame=" + frame + ", epoch=" + epoch + ")");
     }
 
     public long handle() {
@@ -368,7 +388,7 @@ public class VkVoxelComputePipeline extends TrackedObject implements VkVoxelPipe
     }
 
     private void createDescriptorPoolAndSets(MemoryStack stack) {
-        int frames = Math.max(1, VkVoxel.framesNum());
+        int frames = Math.max(VkVoxel.MAX_FRAME_SLOTS, VkVoxel.framesNum());
         int totalSets = frames * SETS_PER_FRAME;
 
         VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(this.bindings.size(), stack);

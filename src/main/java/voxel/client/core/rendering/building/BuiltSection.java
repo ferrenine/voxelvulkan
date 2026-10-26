@@ -14,6 +14,11 @@ public final class BuiltSection {
     public final MemoryBuffer geometryBuffer;
     public final MemoryBuffer lightBuffer;
     public final int[] offsets;
+    /**
+     * Monotonic content generation from the build task (T-02). Results are
+     * only accepted while this still matches the position's current task.
+     */
+    public long generation;
 
     private BuiltSection(long position, byte children) {
         this(position, children, -1, null, null, null);
@@ -44,10 +49,12 @@ public final class BuiltSection {
     }
 
     public BuiltSection clone() {
-        return new BuiltSection(this.position, this.childExistence, this.aabb,
+        BuiltSection copy = new BuiltSection(this.position, this.childExistence, this.aabb,
                 this.geometryBuffer!=null?this.geometryBuffer.copy():null,
                 this.lightBuffer!=null?this.lightBuffer.copy():null,
                 this.offsets!=null?Arrays.copyOf(this.offsets, this.offsets.length):null);
+        copy.generation = this.generation;
+        return copy;
     }
 
     public void free() {

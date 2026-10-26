@@ -47,7 +47,7 @@ public class WorldUpdater {
 
             //TODO: remove the nonAirCountDelta stuff if level != 0
 
-            {//Do a bunch of funny math
+            synchronized (worldSection) {//Do a bunch of funny math
                 var secD = worldSection.materializeData();//must not write into SHARED_AIR_DATA
                 int baseSec = bx | (bz << 5) | (by << 10);
                 if (lvl == 0) {

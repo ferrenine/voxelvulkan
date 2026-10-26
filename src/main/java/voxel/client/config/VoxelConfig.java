@@ -29,7 +29,7 @@ public class VoxelConfig {
     public int sectionRenderDistance = 16;
     public int serviceThreads = (int) Math.max(CpuLayout.getCoreCount() / 1.5, 1);
     // Minimum on-screen size (pixels) a node must have before the traversal
-    // subdivides it. Larger = coarser far LOD and fewer quads. At 1600p / 70°
+    // subdivides it. Larger = coarser far LOD and fewer quads. At 1600p / 70掳
     // FOV the default 64 gives roughly: LOD 0 to 1.1 km, LOD 1 to 2.3 km,
     // LOD 2 to 4.6 km, LOD 3 to 9.1 km. 28 is the old auto-balancer floor: it
     // keeps subdividing out to several kilometres, so the view collapses to
@@ -50,7 +50,7 @@ public class VoxelConfig {
     public int temporalCatchupMaxDraws = 20000;
 
     public boolean useEnvironmentalFog = true;
-    //AUDIT-DEAD: never read — Sodium is not present on this build.
+    //AUDIT-DEAD: never read 鈥?Sodium is not present on this build.
     public boolean dontUseSodiumBuilderThreads = false;
 
     // LOD boundary buffer: controls the safety margin between vanilla chunks and LOD rendering
@@ -66,16 +66,18 @@ public class VoxelConfig {
     // Inspired by Distant Horizons' earth curvature feature
     public int earthCurveRatio = 0;
 
-    // Geometry VRAM buffer size in MB (0 = Auto detection based on GPU VRAM, e.g. 512, 768, 1024, 1536)
-    // Prevents VRAM overflow on 4GB / 6GB / 8GB GPUs
+    // Per-buffer geometry VRAM size in MB (0 = Auto detection based on GPU VRAM,
+    // e.g. 512, 768, 1024, 1536). A second light/AO buffer of the same size is
+    // always allocated, so total usage is 2x this value. Prevents VRAM overflow
+    // on 4GB / 6GB / 8GB GPUs.
     public int geometryBufferSizeMB = 0;
 
     // LOD Water & Translucent Reflection (Screen-Space Reflection & wave normal enhancement)
     public boolean enableWaterSSR = true;
 
-    // Distant Shader Shadows & Lighting (Cloud shadows, sunlight attenuation on LODs via Iris)
-    // Can be disabled to save performance on low-end GPUs
-    //AUDIT-DEAD: field never read — distant shadows are always on.
+    // Distant Shader Shadows: lets Voxel LOD terrain cast into Beryl's shadow map.
+    // This is a compatibility feature (far trees/hills shadow far terrain), not a
+    // performance optimisation; it costs one extra LOD draw into the shadow pass.
     public boolean enableDistantShaderShadows = true;
 
     // World Pre-generation settings
@@ -92,7 +94,7 @@ public class VoxelConfig {
     public boolean gpuTiming = false;
 
     private static VoxelConfig loadOrCreate() {
-        //NOTE: always try the file first — returning the disabled fallback just
+        //NOTE: always try the file first 鈥?returning the disabled fallback just
         // because VoxelCommon isn't available yet permanently poisons CONFIG
         // (this is a static initializer, it only runs once).
         var path = getConfigPath();
@@ -155,6 +157,11 @@ public class VoxelConfig {
 
     public boolean isRenderingEnabled() {
         return VoxelCommon.isAvailable() && this.enabled && this.enableRendering;
+    }
+
+    /** Master switch combined with the per-feature ingest toggle. */
+    public boolean isIngestEnabled() {
+        return this.enabled && this.ingestEnabled;
     }
 }
 

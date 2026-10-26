@@ -21,16 +21,16 @@ public class GeometryCache {
 
     //Puts the section into the cache
     public void put(BuiltSection section) {
-        long sz = section.geometryBuffer != null ? section.geometryBuffer.size : 0;
+        long sz = sizeOf(section);
         this.lock.lock();
         var prev = this.cache.put(section.position, section);
         this.currentSize += sz;
         if (prev != null) {
-            this.currentSize -= prev.geometryBuffer != null ? prev.geometryBuffer.size : 0;
+            this.currentSize -= sizeOf(prev);
         }
         while (this.maxCombinedSize <= this.currentSize && !this.cache.isEmpty()) {
             var entry = this.cache.removeFirst();
-            this.currentSize -= entry.geometryBuffer != null ? entry.geometryBuffer.size : 0;
+            this.currentSize -= sizeOf(entry);
             entry.free();
         }
         this.lock.unlock();
@@ -39,11 +39,20 @@ public class GeometryCache {
         }
     }
 
+    /** Both native buffers belong to the cache entry; lightAO is as large as geometry. */
+    private static long sizeOf(BuiltSection section) {
+        long size = section.geometryBuffer != null ? section.geometryBuffer.size : 0L;
+        if (section.lightBuffer != null) {
+            size += section.lightBuffer.size;
+        }
+        return size;
+    }
+
     public BuiltSection remove(long position) {
         this.lock.lock();
         var section = this.cache.remove(position);
         if (section != null) {
-            this.currentSize -= section.geometryBuffer != null ? section.geometryBuffer.size : 0;
+            this.currentSize -= sizeOf(section);
         }
         this.lock.unlock();
         return section;

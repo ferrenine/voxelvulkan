@@ -1,0 +1,79 @@
+{
+  "voxel.title": "Voxel",
+
+  "voxel.page.engine": "引擎与核心",
+  "voxel.page.display": "显示与精度",
+  "voxel.page.atmosphere": "大气与着色",
+
+  "voxel.block.core": "核心",
+  "voxel.block.threads": "线程",
+  "voxel.block.pregen": "预生成",
+  "voxel.block.diagnostics": "诊断",
+  "voxel.block.geometry": "几何",
+  "voxel.block.world_shape": "世界形状",
+  "voxel.block.temporal": "时域",
+  "voxel.block.shading": "着色",
+
+  "voxel.option.enabled": "引擎总开关",
+  "voxel.option.enabled.tooltip": "Voxel LOD 引擎的总开关。开启后，远处地形会被动态采样进压缩稀疏体素八叉树，并直接在 GPU 上渲染。切换后 Apply 会自动重载渲染器。",
+
+  "voxel.option.rendering": "LOD 渲染",
+  "voxel.option.rendering.tooltip": "开启后 GPU 会绘制远处体素地形。关闭只停止光栅化，后台采样和缓存仍会继续。Apply 后立即生效。",
+
+  "voxel.option.world_sampling": "世界采样",
+  "voxel.option.world_sampling.tooltip": "实时把新生成或修改过的区块写入持久化的 LOD 八叉树数据。",
+
+  "voxel.option.worker_threads": "工作线程数",
+  "voxel.option.worker_threads.tooltip": "用于体素处理和地形网格构建的并行线程数。多核 CPU 上提高该值可加快 LOD 生成。",
+
+  "voxel.option.auto_pregen": "自动预生成",
+  "voxel.option.auto_pregen.tooltip": "进入单人世界时自动预生成出生点周围的远景 LOD 数据，避免刚进世界时地平线出现空洞。",
+
+  "voxel.option.auto_pregen_radius": "预生成半径",
+  "voxel.option.auto_pregen_radius.tooltip": "自动预生成覆盖的区块半径（16 到 128）。",
+
+  "voxel.option.auto_pregen_threads": "预生成线程数",
+  "voxel.option.auto_pregen_threads.tooltip": "专门用于世界预生成的线程数量。",
+
+  "voxel.option.f3_diagnostics": "F3 诊断信息",
+  "voxel.option.f3_diagnostics.tooltip": "在 F3 调试屏幕上显示八叉树遍历数量、GPU 间接绘制批次和显存占用。会每帧回读 GPU 统计，对帧率有影响，仅调试时开启；Apply 后自动重载渲染器。",
+
+  "voxel.option.gpu_timing": "GPU 计时",
+  "voxel.option.gpu_timing.tooltip": "仅调试用：在每个 LOD pass 前后写入 Vulkan 时间戳，每 15 帧回读一次。Bottom-of-pipe 时间戳可能让 pass 串行，正常游玩请关闭。",
+
+  "voxel.option.horizon_distance": "地平线距离",
+  "voxel.option.horizon_distance.tooltip": "远景 LOD 的最大可见半径。1 个单位 = 32 区块（512 格）。数值越大看得越远，GPU 负担也越高。",
+
+  "voxel.option.sub_division": "细分尺寸",
+  "voxel.option.sub_division.tooltip": "最细一级 LOD 区块的边长（格）。调大可以显著减少四边形数量和 GPU 开销，代价是轮廓更方。",
+
+  "voxel.option.lod_scale": "LOD 分辨率比例",
+  "voxel.option.lod_scale.tooltip": "远景 LOD pass 的内部渲染分辨率，按窗口百分比计算。调低能省大量 GPU 时间，但远处会变糊。",
+
+  "voxel.option.seam_overlap": "接缝重叠",
+  "voxel.option.seam_overlap.tooltip": "原版区块边界与远景 LOD 网格之间的几何重叠余量。1 到 2 可以消除可见裂缝和飞行时的区块弹入。",
+
+  "voxel.option.vram_budget": "显存预算（单缓冲）",
+  "voxel.option.vram_budget.tooltip": "LOD 几何占用的单缓冲显存上限。引擎还会分配一份等大的光照/AO 缓冲，因此总显存占用为该值的 2 倍。Auto 会根据显卡显存自动选择（4GB 卡每缓冲 512MB 起，12GB 以上最高每缓冲 1.5GB）。Apply 后会自动重载渲染器。",
+
+  "voxel.option.planetary_curvature": "星球曲率",
+  "voxel.option.planetary_curvature.tooltip": "模拟站在球形星球上，让远处地形随距离下沉（0 = 平面世界，数值越大星球越小）。",
+
+  "voxel.option.temporal_catchup": "时域补画",
+  "voxel.option.temporal_catchup.tooltip": "把本帧新变得可见的区块再补画一遍。快速转视角时能填补空洞，代价是多一次绘制。",
+
+  "voxel.option.temporal_draws": "补画预算",
+  "voxel.option.temporal_draws.tooltip": "时域补画每帧最多提交的区块数量。",
+
+  "voxel.option.atmospheric_fog": "大气雾",
+  "voxel.option.atmospheric_fog.tooltip": "让远景 LOD 地形与生物群系大气颜色和原版地平线雾自然过渡。Apply 后会自动重载渲染器。",
+
+  "voxel.option.water_ssr": "水面 SSR",
+  "voxel.option.water_ssr.tooltip": "为远处海洋、河流和水体渲染实时屏幕空间反射与动态波浪高光。Apply 后会自动重载渲染器。",
+
+  "voxel.option.shader_shadows": "光影阴影",
+  "voxel.option.shader_shadows.tooltip": "让远景 LOD 地形投射到 Beryl 的阴影图中，使远处树木和山丘能遮住远处地形。",
+
+  "key.categories.voxel": "Voxel",
+  "key.voxel.reload": "重载 LOD 渲染器 (Ctrl+R)"
+}

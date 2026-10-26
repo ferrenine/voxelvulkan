@@ -127,6 +127,12 @@ public class VkFramebuffer extends TrackedObject {
             throw new IllegalStateException("VkFramebuffer has no attachments bound");
         }
         if (color == null) {
+            // A depth-only target is rebuilt on every resize; free the previous
+            // dummy colour image instead of overwriting the only reference.
+            if (this.dummyColor != null) {
+                this.dummyColor.free();
+                this.dummyColor = null;
+            }
             this.dummyColor = VkVoxelImage.colorTarget("VoxelDummyColor", depth.width(), depth.height(),
                     VK_FORMAT_R8G8B8A8_UNORM);
             color = this.dummyColor;

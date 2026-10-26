@@ -100,7 +100,11 @@ public class ChunkBoundStore implements IBoundStore {
         int size = (int) (this.idx2chunk.length * 1.5);
         Logger.info("Resizing chunk bound position buffer to: " + size);
         VkBuffer old = this.chunkPosBuffer;
-        this.chunkPosBuffer = new VkBuffer(size * 8L);
+        // Do not zero the new buffer: the copy below fills the old range and the
+        // remaining slots are written by put() before getCount() exposes them.
+        // A zero() here would enqueue a fill immediately before the copy with no
+        // barrier between them (fill could clobber the copied positions).
+        this.chunkPosBuffer = new VkBuffer(size * 8L, false);
         old.copyTo(this.chunkPosBuffer, 0, 0, old.size());
         old.free();
 

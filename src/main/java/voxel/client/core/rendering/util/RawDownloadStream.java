@@ -91,10 +91,21 @@ public class RawDownloadStream {
         this.tick();
         voxel.client.vk.VkVoxel.waitIdle();
         this.tick();
-        if (this.frames.size() != 0) {
-            throw new IllegalStateException();
+        // Frames recorded after the last submission cannot be waited on (this
+        // stream is being destroyed). Drop their callbacks but release their
+        // staging memory so a failed construction/shutdown cannot leak it.
+        int discarded = 0;
+        while (!this.frames.isEmpty()) {
+            var frame = this.frames.poll();
+            for (var fragment : frame.fragments) {
+                this.allocationArena.free(fragment.allocation);
+            }
+            frame.fence.free();
+            discarded++;
         }
-        this.frames.forEach(a -> a.fence.free());
+        if (discarded != 0) {
+            Logger.warn("Raw download stream discarded " + discarded + " unsubmitted frame(s) during shutdown");
+        }
         this.downloadBuffer.free();
     }
 }

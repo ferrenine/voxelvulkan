@@ -46,6 +46,7 @@ import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 import org.lwjgl.system.MemoryUtil;
 
+import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -69,6 +70,30 @@ import static voxel.client.core.model.ModelStore.MODEL_SIZE;
 public class ModelFactory {
     public static final int MODEL_TEXTURE_SIZE = 16;
     public static final int LAYERS = Integer.numberOfTrailingZeros(MODEL_TEXTURE_SIZE);
+
+    /**
+     * Model ids are packed into a 16-bit field of the quad metadata and index
+     * the model/atlas buffers, so the id space ends at 65,535.
+     */
+    public static final int MAX_MODEL_COUNT = 1 << 16;
+
+    /**
+     * Biome tint LUT capacity in ints (the colour buffer is this many RGBA
+     * slots). One row per biome-dependent model, one column per biome id.
+     */
+    public static final int MAX_BIOME_COLOUR_SLOTS = 1 << 16;
+
+    /** Biome ids are 9 bits wide in the packed quad format. */
+    public static final int MAX_BIOME_ID = (1 << 9) - 1;
+
+    /**
+     * Publication channel for {@link #idMappings}. The bake thread writes every
+     * metadata table first, then publishes the model id with release; mesher
+     * threads must read it with acquire before touching metadataCache /
+     * fluidStateLUT / stairStepLUT.
+     */
+    private static final VarHandle ID_MAPPINGS =
+            MethodHandles.arrayElementVarHandle(int[].class);
 
     //Slanted face detection (block units): planar within 3/4 texel, sloped over at least 2.5 texels,
     // slope within the packed int8/64 range
@@ -175,9 +200,9 @@ public class ModelFactory {
         this.storage = storage;
         this.bakery = new ModelTextureBakery(MODEL_TEXTURE_SIZE, MODEL_TEXTURE_SIZE);
 
-        this.metadataCache = new long[1<<16];
-        this.fluidStateLUT = new int[1<<16];
-        this.stairStepLUT = new int[1<<16];
+        this.metadataCache = new long[MAX_MODEL_COUNT];
+        this.fluidStateLUT = new int[MAX_MODEL_COUNT];
+        this.stairStepLUT = new int[MAX_MODEL_COUNT];
         this.idMappings = new int[1<<20];//Max of 1 million blockstates mapping to 65k model states
         Arrays.fill(this.idMappings, -1);
         Arrays.fill(this.fluidStateLUT, -1);
@@ -189,6 +214,53 @@ public class ModelFactory {
         MemoryUtil.memSet(airResult.rawData.address, 0, airResult.rawData.size);
         this.rawBakeResults.add(airResult);
         this.processModelResult();
+    }
+
+    private int modelOverflowCount;
+    private int biomeOverflowCount;
+    private int biomeRowOverflowCount;
+
+    /** Removes the in-flight marker without requiring that this thread added it. */
+    private void clearInFlight(int blockId) {
+        this.blockStatesInFlightLock.lock();
+        this.blockStatesInFlight.remove(blockId);
+        this.blockStatesInFlightLock.unlock();
+    }
+    private void reportModelOverflow(Object state) {
+        this.modelOverflowCount++;
+        if (this.modelOverflowCount == 1 || (this.modelOverflowCount & 1023) == 0) {
+            Logger.error("Model id space exhausted (" + MAX_MODEL_COUNT
+                    + " ids): state " + state
+                    + " is rendered as air. overflowed models: " + this.modelOverflowCount);
+        }
+    }
+
+    private void reportBiomeOverflow(int biomeId, int projectedBiomes) {
+        this.biomeOverflowCount++;
+        if (this.biomeOverflowCount == 1 || (this.biomeOverflowCount & 255) == 0) {
+            Logger.error("Biome tint LUT is full (" + MAX_BIOME_COLOUR_SLOTS
+                    + " slots): dropping biome id " + biomeId
+                    + " (would need " + projectedBiomes + " columns x "
+                    + this.modelsRequiringBiomeColours.size() + " models)."
+                    + " Biome " + biomeId + " falls back to stale/white tint. dropped: "
+                    + this.biomeOverflowCount);
+        }
+    }
+
+    /** True if one more biome-dependent model row fits, including room for any 9-bit biome id. */
+    private boolean biomeRowFits(int models, int biomes) {
+        return (long) models * biomes + MAX_BIOME_ID < MAX_BIOME_COLOUR_SLOTS;
+    }
+
+    private void reportBiomeRowOverflow(BlockState state) {
+        this.biomeRowOverflowCount++;
+        if (this.biomeRowOverflowCount == 1 || (this.biomeRowOverflowCount & 255) == 0) {
+            Logger.error("Biome tint LUT rows exhausted (" + this.biomes.size()
+                    + " biomes x " + this.modelsRequiringBiomeColours.size()
+                    + " models): state " + state
+                    + " falls back to a constant tint. overflowed models: "
+                    + this.biomeRowOverflowCount);
+        }
     }
 
     public void setCustomBlockStateMapping(Object2IntMap<BlockState> mapping) {
@@ -234,24 +306,35 @@ public class ModelFactory {
         if (blockId < 0 || blockId >= this.idMappings.length || blockId >= this.mapper.getBlockStateCount()) {
             return false;
         }
-        if (this.idMappings[blockId] != -1) {
+        if (getModelIdAcquire(blockId) != -1) {
             return false;
         }
         //We are (probably) going to be baking the block id
         // check that it is currently not inflight, if it is, return as its already being baked
         // else add it to the flight as it is going to be baked
         this.blockStatesInFlightLock.lock();
-        if (!this.blockStatesInFlight.add(blockId)) {
+        try {
+            // Recheck under the flight lock: the bake thread publishes the
+            // mapping before it removes the in-flight entry, so this closes the
+            // window where we would add a marker for an already-published id.
+            if (getModelIdAcquire(blockId) != -1) {
+                return false;
+            }
+            if (!this.blockStatesInFlight.add(blockId)) {
+                //Block baking is already in-flight
+                return false;
+            }
+        } finally {
             this.blockStatesInFlightLock.unlock();
-            //Block baking is already in-flight
-            return false;
         }
-        this.blockStatesInFlightLock.unlock();
 
         VarHandle.loadLoadFence();
 
         //We need to get it twice cause of threading
-        if (this.idMappings[blockId] != -1) {
+        if (getModelIdAcquire(blockId) != -1) {
+            // The bake finished between the two checks; drop the marker we just
+            // added instead of leaving it in the in-flight set forever.
+            clearInFlight(blockId);
             return false;
         }
 
@@ -266,7 +349,7 @@ public class ModelFactory {
 
             int fluidStateId = this.mapper.getIdForBlockState(fluidState);
 
-            if (this.idMappings[fluidStateId] == -1) {
+            if (getModelIdAcquire(fluidStateId) == -1) {
                 //Dont have to check for inflight as that is done recursively :p
 
                 //This is a hack but does work :tm: due to how the download stream is setup
@@ -285,11 +368,19 @@ public class ModelFactory {
         }
 
         RawBakeResult result = new RawBakeResult(blockId, blockState);
-        int allocation = this.downstream.download(MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE*2*4*6, ptr -> this.rawBakeResults.add(result.cpyBuf(ptr)));
-        int flags = this.bakery.renderToStream(isLava ? Blocks.LAVA.defaultBlockState() : blockState, this.downstream.getBufferId(), allocation);
-        result.hasDarkenedTextures = (flags&2)!=0;
-        result.isShaded = (flags&1)!=0;
-        result.hasAnimatedSprites = (flags&4)!=0;
+        try {
+            int allocation = this.downstream.download(MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE*2*4*6, ptr -> this.rawBakeResults.add(result.cpyBuf(ptr)));
+            int flags = this.bakery.renderToStream(isLava ? Blocks.LAVA.defaultBlockState() : blockState, this.downstream.getBufferId(), allocation);
+            result.hasDarkenedTextures = (flags&2)!=0;
+            result.isShaded = (flags&1)!=0;
+            result.hasAnimatedSprites = (flags&4)!=0;
+        } catch (RuntimeException | Error e) {
+            // The bake never reaches processTextureBakeResult, so nobody else
+            // would remove this marker; without this the block id stays
+            // "in flight" forever and never gets re-requested.
+            clearInFlight(blockId);
+            throw e;
+        }
         return true;
     }
 
@@ -412,7 +503,7 @@ public class ModelFactory {
         try {
             blockId = this.canonicalLavaBlockId;
             modelId = this.canonicalLavaModelId;
-            if (blockId < 0 || modelId < 0 || this.idMappings[blockId] != modelId) {
+            if (blockId < 0 || modelId < 0 || getModelIdAcquire(blockId) != modelId) {
                 return;
             }
         } finally {
@@ -534,7 +625,7 @@ public class ModelFactory {
      *                        model is registered for periodic texture refresh.
      */
     private ModelBakeResultUpload processTextureBakeResult(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean isShaded, boolean darkenedTinting, boolean lavaFlowCapture, boolean hasAnimatedSprites) {
-        if (this.idMappings[blockId] != -1 && !lavaFlowCapture) {
+        if (getModelIdAcquire(blockId) != -1 && !lavaFlowCapture) {
             //This should be impossible to reach as it means that multiple bakes for the same blockId happened and where inflight at the same time!
             throw new IllegalStateException("Block id already added: " + blockId + " for state: " + blockState);
         }
@@ -562,7 +653,7 @@ public class ModelFactory {
 
             int fluidStateId = this.mapper.getIdForBlockState(fluidState);
 
-            clientFluidStateId = this.idMappings[fluidStateId];
+            clientFluidStateId = getModelIdAcquire(fluidStateId);
             if (clientFluidStateId == -1) {
                 throw new IllegalStateException("Block has a fluid state but fluid state is not already baked!!!");
             }
@@ -608,14 +699,14 @@ public class ModelFactory {
 
             {//Deduplicate same entries
                 // MC 1.21.1: DEFAULT_BIOME is now Holder<Biome>, need .value() to get Biome
-                entry = new ModelEntry(textureData, clientFluidStateId, isBiomeColourDependent||colourProvider==null?-1:captureColourConstant(colourProvider, blockState, DEFAULT_BIOME.value())|0xFF000000, offsetInfo);
+                entry = new ModelEntry(copyTextureData(textureData), clientFluidStateId, isBiomeColourDependent||colourProvider==null?-1:captureColourConstant(colourProvider, blockState, DEFAULT_BIOME.value())|0xFF000000, offsetInfo);
                 int possibleDuplicate = this.modelTexture2id.getInt(entry);
                 if (possibleDuplicate != -1) {//Duplicate found
                     if (lavaFlowCapture) {
                         Logger.warn("Lava flow-top capture duplicates model " + possibleDuplicate + ", flowing lava tops disabled");
                         return null;
                     }
-                    this.idMappings[blockId] = possibleDuplicate;
+                    publishModelId(blockId, possibleDuplicate);
                     modelId = possibleDuplicate;
                     if (isLava && this.canonicalLavaModelId == -1) {
                         this.canonicalLavaBlockId = blockId;
@@ -625,14 +716,18 @@ public class ModelFactory {
                         this.animatedModels.putIfAbsent(possibleDuplicate, new AnimatedEntry(blockId, blockState));
                     }
                     //Remove from flight
-                    this.blockStatesInFlightLock.lock();
-                    if (!this.blockStatesInFlight.remove(blockId)) {
-                        this.blockStatesInFlightLock.unlock();
-                        throw new IllegalStateException();
-                    }
-                    this.blockStatesInFlightLock.unlock();
+                    clearInFlight(blockId);
                     return null;
                 } else {//Not a duplicate so create a new entry
+                    if (this.modelTexture2id.size() >= MAX_MODEL_COUNT) {
+                        this.reportModelOverflow(blockState);
+                        if (!lavaFlowCapture) {
+                            // Publish an air mapping so the mesher stops retrying this state.
+                            publishModelId(blockId, 0);
+                            clearInFlight(blockId);
+                        }
+                        return null;
+                    }
                     modelId = this.modelTexture2id.size();
                     //NOTE: we set the mapping at the very end so that race conditions with this and getMetadata dont occur
                     //this.idMappings[blockId] = modelId;
@@ -941,8 +1036,11 @@ public class ModelFactory {
         //Have 40 bytes free for remaining model data
         // todo: put in like the render layer type ig? along with colour resolver info
         int modelFlags = 0;
+        boolean biomeCapacityHit = isBiomeColourDependent && !this.biomes.isEmpty()
+                && !this.biomeRowFits(this.modelsRequiringBiomeColours.size() + 1, this.biomes.size());
+        boolean useBiomeLut = isBiomeColourDependent && !this.biomes.isEmpty() && !biomeCapacityHit;
         modelFlags |= colourProvider != null?1:0;
-        modelFlags |= isBiomeColourDependent?2:0;//Basicly whether to use the next int as a colour or as a base index/id into a colour buffer for biome dependent colours
+        modelFlags |= useBiomeLut?2:0;//Basicly whether to use the next int as a colour or as a base index/id into a colour buffer for biome dependent colours
         modelFlags |= blockRenderLayer == ChunkSectionLayer.TRANSLUCENT?4:0;//Is translucent
 
 
@@ -961,9 +1059,14 @@ public class ModelFactory {
         //Temporary override to always be non biome specific
         if (colourProvider == null) {
             MemoryUtil.memPutInt(uploadPtr, -1);//Set the default to nothing so that its faster on the gpu
-        } else if (!isBiomeColourDependent) {
-            MemoryUtil.memPutInt(uploadPtr, entry.tintingColour);
-        } else if (!this.biomes.isEmpty()) {
+        } else if (!useBiomeLut) {
+            if (isBiomeColourDependent && biomeCapacityHit) {
+                // No row in the colour LUT (it is full): use a constant white
+                // tint instead of a dangling row index.
+                this.reportBiomeRowOverflow(blockState);
+            }
+            MemoryUtil.memPutInt(uploadPtr, isBiomeColourDependent ? -1 : entry.tintingColour);
+        } else {
             //Populate the list of biomes for the model state
             int biomeIndex = this.modelsRequiringBiomeColours.size() * this.biomes.size();
             resolvedBiomeIndex = biomeIndex;
@@ -1005,7 +1108,7 @@ public class ModelFactory {
         if (stepTextureData != null && stepDepths != null) {
             uploadResult.stepUpload = this.createStairStepUpload(
                     modelId, stepTextureData, stepDepths, checkMode, blockRenderLayer,
-                    colourProvider, isBiomeColourDependent, entry.tintingColour,
+                    colourProvider, useBiomeLut, entry.tintingColour,
                     resolvedBiomeIndex, resolvedCustomId, isShaded, darkenedTinting);
         }
 
@@ -1015,14 +1118,9 @@ public class ModelFactory {
         if (lavaFlowCapture) {
             this.canonicalLavaFlowModelId = modelId;
         } else {
-            this.idMappings[blockId] = modelId;
+            publishModelId(blockId, modelId);
 
-            this.blockStatesInFlightLock.lock();
-            if (!this.blockStatesInFlight.remove(blockId)) {
-                this.blockStatesInFlightLock.unlock();
-                throw new IllegalStateException("processing a texture bake result but the block state was not in flight!!");
-            }
-            this.blockStatesInFlightLock.unlock();
+            clearInFlight(blockId);
         }
 
         return uploadResult;
@@ -1064,6 +1162,16 @@ public class ModelFactory {
     }
 
     private BiomeUploadResult addBiome0(int id, Biome biome) {
+        if (!this.modelsRequiringBiomeColours.isEmpty()) {
+            int projectedBiomes = Math.max(this.biomes.size(), id + 1);
+            if (!this.biomeRowFits(this.modelsRequiringBiomeColours.size(), projectedBiomes)) {
+                // Growing the rows would run past the fixed colour buffer. Keep the
+                // existing rows valid and drop this biome; its tint degrades to the
+                // stale/white fallback, but no upload can go out of bounds.
+                this.reportBiomeOverflow(id, projectedBiomes);
+                return null;
+            }
+        }
         for (int i = this.biomes.size(); i <= id; i++) {
             this.biomes.add(null);
         }
@@ -1217,6 +1325,21 @@ public class ModelFactory {
         return biomeDependent[0];
     }
 
+    /**
+     * The model map is keyed by the texture arrays. Stair-step extraction and
+     * hollow-container shading mutate the arrays in place after the key has
+     * been inserted, which changes equals() without rehashing the entry and
+     * makes the whole map unreliable (duplicate model ids / wrong atlas
+     * colours). Keep an independent copy for the key.
+     */
+    private static ColourDepthTextureData[] copyTextureData(ColourDepthTextureData[] data) {
+        var copy = new ColourDepthTextureData[data.length];
+        for (int i = 0; i < data.length; i++) {
+            copy[i] = data[i] == null ? null : data[i].clone();
+        }
+        return copy;
+    }
+
     private static ColourDepthTextureData[] extractStairStepTextures(ColourDepthTextureData[] textureData) {
         final int stepThreshold = ((1 << 24) - 1) / 8; // u2fdepth <= 0.25f is outer (0.0), > 0.25f is inner (0.5)
         ColourDepthTextureData[] stepData = new ColourDepthTextureData[6];
@@ -1290,6 +1413,10 @@ public class ModelFactory {
             boolean isBiomeColourDependent, int tintingColour, int resolvedBiomeIndex,
             int resolvedCustomId, boolean isShaded, boolean darkenedTinting) {
         int stepModelId = this.modelTexture2id.size();
+        if (stepModelId >= MAX_MODEL_COUNT) {
+            this.reportModelOverflow("stair-step sibling of model " + parentModelId);
+            return null;
+        }
         this.modelTexture2id.put(new ModelEntry(stepTextureData, -2 - parentModelId, tintingColour, 0), stepModelId);
         this.stairStepLUT[parentModelId] = stepModelId;
 
@@ -1355,7 +1482,7 @@ public class ModelFactory {
         } else if (!isBiomeColourDependent) {
             MemoryUtil.memPutInt(uploadPtr, tintingColour);
         } else {
-            MemoryUtil.memPutInt(uploadPtr, resolvedBiomeIndex != -1 ? resolvedBiomeIndex : 0);
+            MemoryUtil.memPutInt(uploadPtr, resolvedBiomeIndex);
         }
         uploadPtr += 4;
 
@@ -1438,12 +1565,18 @@ public class ModelFactory {
         return res;
     }
 
-    public int[] _unsafeRawAccess() {
-        return this.idMappings;
+    /** Acquire-load of the published model id (-1 = not baked yet). */
+    public int getModelIdAcquire(int blockId) {
+        return (int) ID_MAPPINGS.getAcquire(this.idMappings, blockId);
+    }
+
+    /** Release-publish after every metadata table for this model is written. */
+    private void publishModelId(int blockId, int modelId) {
+        ID_MAPPINGS.setRelease(this.idMappings, blockId, modelId);
     }
 
     public int getModelId(int blockId) {
-        int map = this.idMappings[blockId];
+        int map = getModelIdAcquire(blockId);
         if (map == -1) {
             throw new IdNotYetComputedException(blockId, true);
         }
@@ -1451,7 +1584,7 @@ public class ModelFactory {
     }
 
     public boolean hasModelForBlockId(int blockId) {
-        return this.idMappings[blockId] != -1;
+        return getModelIdAcquire(blockId) != -1;
     }
 
     public int getFluidClientStateId(int clientBlockStateId) {

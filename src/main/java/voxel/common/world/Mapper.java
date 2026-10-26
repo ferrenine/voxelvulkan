@@ -76,8 +76,8 @@ public class Mapper {
     private volatile BiomeEntry[] biomeId2biomeEntryArray = new BiomeEntry[16];
     private volatile int biomeCount = 0;
 
-    private Consumer<StateEntry> newStateCallback;
-    private Consumer<BiomeEntry> newBiomeCallback;
+    private volatile Consumer<StateEntry> newStateCallback;
+    private volatile Consumer<BiomeEntry> newBiomeCallback;
     public Mapper(IMappingStorage storage) {
         this.storage = storage;
         //Insert air since its a special entry (index 0)

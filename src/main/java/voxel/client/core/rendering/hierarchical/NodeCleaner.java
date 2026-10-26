@@ -100,9 +100,13 @@ public class NodeCleaner {
     public void tick(VkBuffer nodeDataBuffer) {
         this.visibilityId++;
         if (this.shouldCleanGeometry()) {
-            this.outputBuffer.fill(this.nodeManager.maxNodeCount - 2);//TODO: maybe dont set to zero??
+            // Empty output slots are the one-past-the-end id, never an id that
+            // NodeStore.allocate() can hand out (the old maxNodeCount-2 sentinel
+            // was a real allocatable node, so padding could evict live geometry).
+            this.outputBuffer.fill(this.nodeManager.maxNodeCount);//TODO: maybe dont set to zero??
 
             this.sorter.ssbo(3, nodeDataBuffer);
+            this.sorter.pushUint(0, this.nodeManager.maxNodeCount);
             VkVoxel.computeBarrier();
             this.sorter.dispatch((this.nodeManager.getCurrentMaxNodeId() + (SORTING_WORKER_SIZE*WORK_PER_THREAD) - 1) / (SORTING_WORKER_SIZE*WORK_PER_THREAD), 1, 1);
 
@@ -111,7 +115,8 @@ public class NodeCleaner {
                     .ssbo(1, nodeDataBuffer)
                     .ssbo(2, this.outputBuffer, 4 * OUTPUT_COUNT, 8 * OUTPUT_COUNT)
                     .ssbo(3, this.visibilityBuffer)
-                    .pushUint(0, this.visibilityId);
+                    .pushUint(0, this.visibilityId)
+                    .pushUint(4, this.nodeManager.maxNodeCount);
 
             VkVoxel.computeBarrier();
             this.resultTransformer.dispatch(1, 1, 1);

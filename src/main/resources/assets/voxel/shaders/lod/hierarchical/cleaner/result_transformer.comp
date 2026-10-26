@@ -19,20 +19,24 @@ layout(binding = VISIBILITY_BUFFER_BINDING, std430) restrict buffer VisibilityBu
 
 layout(push_constant) uniform PushConstants {
     uint visibilityCounter;
+    uint nodeCount;
 };
 void main() {
-    uint id = minVisIds[gl_LocalInvocationID.x];
-    uvec4 node = nodes[id];
-    uvec2 res = node.xy;
-    //AUDIT-FIXME: empty-node sentinel test self-flagged "DONT THINK THIS IS
-    // ACTUALLY CORRECT" — unverified.
-    if (all(equal(node, uvec4(-1)))) {//If its a empty node
-        res = uvec2(-1);
+    uint id = minVisIds[gl_LocalInvocationID.x] & ((1u<<31)-1);
+    uvec2 res = uvec2(-1);
+    // minVisIds is filled with nodeCount as the empty-slot sentinel: it is not
+    // an allocated node, so never dereference nodes[]/visibility[] with it.
+    if (id < nodeCount) {
+        uvec4 node = nodes[id];
+        res = node.xy;
+        //AUDIT-FIXME: empty-node sentinel test self-flagged "DONT THINK THIS IS
+        // ACTUALLY CORRECT" - unverified.
+        if (all(equal(node, uvec4(-1)))) {//If its a empty node
+            res = uvec2(-1);
+        } else {
+            //AUDIT-FIXME: "evil hack" - 60-frame freshness magic number.
+            visibility[id] = visibilityCounter + 60;
+        }
     }
     outputBuffer[gl_LocalInvocationID.x] = res;//Move the position of the node id into the output buffer
-
-    //AUDIT-FIXME: "evil hack" — 60-frame freshness magic number; the author
-    // wanted this tied to the frame index instead of a fixed offset.
-    visibility[id] = visibilityCounter + 60;
-
 }

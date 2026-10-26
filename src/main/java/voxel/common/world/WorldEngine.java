@@ -27,8 +27,8 @@ public class WorldEngine {
     public final SectionStorage storage;
     private final Mapper mapper;
     private final ActiveSectionTracker sectionTracker;
-    private ISectionChangeCallback dirtyCallback;
-    private ISectionSaveCallback saveCallback;
+    private volatile ISectionChangeCallback dirtyCallback;
+    private volatile ISectionSaveCallback saveCallback;
     volatile boolean isLive = true;
 
     public void setDirtyCallback(ISectionChangeCallback callback) {

@@ -27,10 +27,24 @@ public class BasicSectionGeometryData implements IGeometryData {
         if ((geometryCapacity%8)!=0) {
             throw new IllegalStateException();
         }
+        // VK_WHOLE_SIZE descriptors are bounded by maxStorageBufferRange. Intel
+        // iGPUs report 1 GiB - 4 B, so the historical 1 GiB default is already
+        // out of range there; NVIDIA's 0xFFFFFFFF also rejects a 4096 MiB value
+        // from the UI. Clamp before allocating instead of failing in the driver.
+        long ssboLimit = Capabilities.INSTANCE.ssboMaxSize;
+        if (ssboLimit > 0 && geometryCapacity > ssboLimit) {
+            long clamped = ssboLimit & ~7L;
+            Logger.warn("Geometry capacity " + (geometryCapacity / (1024 * 1024))
+                    + "MB exceeds maxStorageBufferRange (" + (ssboLimit / (1024 * 1024))
+                    + "MB); clamping to " + (clamped / (1024 * 1024)) + "MB");
+            geometryCapacity = clamped;
+        }
         long start = System.currentTimeMillis();
-        String msg = "Creating " + (geometryCapacity/(1024*1024)) + "MB geometry buffer";
+        String msg = "Creating " + (geometryCapacity/(1024*1024)) + "MB geometry buffer (+"
+                + (geometryCapacity/(1024*1024)) + "MB lightAO, "
+                + (2L*geometryCapacity/(1024*1024)) + "MB total)";
         if (Capabilities.INSTANCE.canQueryGpuMemory) {
-            msg += " driver states " + (Capabilities.INSTANCE.getFreeDedicatedGpuMemory()/(1024*1024)) + "MB of free memory";
+            msg += "; device has " + (Capabilities.INSTANCE.getTotalDedicatedGpuMemory()/(1024*1024)) + "MB total dedicated memory";
         }
         Logger.info(msg);
         Logger.info("if your game crashes/exits here without any other log message, try manually decreasing the geometry capacity");

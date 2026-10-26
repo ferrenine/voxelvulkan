@@ -46,6 +46,7 @@ public class MixinVkWorldRenderer {
         }
         var system = IGetVoxelRenderSystem.getNullable();
         if (system != null) {
+            system.onFirstSectionLayer();
             var fogData = net.vulkanmod.vulkan.VRenderSystem.getFogData();
             if (fogData != null) {
                 float far = voxel.client.config.VoxelConfig.CONFIG.sectionRenderDistance * 32.0f * 16.0f;

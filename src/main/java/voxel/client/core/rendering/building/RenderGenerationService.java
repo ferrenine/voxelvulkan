@@ -1,9 +1,11 @@
 package voxel.client.core.rendering.building;
 
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import voxel.client.core.model.IdNotYetComputedException;
 import voxel.client.core.model.ModelBakerySubsystem;
+import voxel.common.Logger;
 import voxel.common.thread.Service;
 import voxel.common.thread.ServiceManager;
 import voxel.common.util.Pair;
@@ -36,6 +38,7 @@ public class RenderGenerationService {
         boolean hasDoneModelRequestOuter;
         int attempts;
         int addin;
+        long generation;
         long priority = Long.MIN_VALUE;
         private BuildTask(long position) {
             this.position = position;
@@ -86,6 +89,10 @@ public class RenderGenerationService {
     private final PriorityBlockingQueue<BuildTask> taskQueue = new PriorityBlockingQueue<>(5000, (a,b)-> Long.compareUnsigned(a.priority, b.priority));
     private final StampedLock taskMapLock = new StampedLock();
     private final Long2ObjectOpenHashMap<BuildTask> taskMap = new Long2ObjectOpenHashMap<>(5000);
+    /** Last generation handed to a task per position; guarded by taskMapLock. */
+    private final Long2LongOpenHashMap currentGenerations = new Long2LongOpenHashMap(5000);
+    private static final java.util.concurrent.atomic.AtomicLong GENERATION_COUNTER =
+            new java.util.concurrent.atomic.AtomicLong();
 
     private final WorldEngine world;
     private final ModelBakerySubsystem modelBakery;
@@ -104,6 +111,7 @@ public class RenderGenerationService {
         this.emitMeshlets = emitMeshlets;
         this.world = world;
         this.modelBakery = modelBakery;
+        this.currentGenerations.defaultReturnValue(Long.MIN_VALUE);
 
         this.service = sm.createService(()->{
             //Thread local instance of the factory
@@ -117,6 +125,18 @@ public class RenderGenerationService {
 
     public void setResultConsumer(Consumer<BuiltSection> consumer) {
         this.resultConsumer = consumer;
+    }
+
+    /**
+     * True when {@code generation} is still the newest build generation for
+     * {@code position}. Used by the node manager to reject a slow, older mesh
+     * that finished after a dirty event created a newer task (T-02).
+     */
+    public boolean isCurrentGeneration(long position, long generation) {
+        long stamp = this.taskMapLock.readLock();
+        long current = this.currentGenerations.get(position);
+        this.taskMapLock.unlockRead(stamp);
+        return current == generation;
     }
 
     //NOTE: the biomes are always fully populated/kept up to date
@@ -159,6 +179,7 @@ public class RenderGenerationService {
     private void processJob(RenderDataFactory factory, IntOpenHashSet seenMissedIds) {
         BuildTask task = this.taskQueue.poll();
         this.taskQueueCount.decrementAndGet();
+        final long taskGeneration = task.generation;
 
         //long time = BuiltSection.getTime();
         boolean shouldFreeSection = true;
@@ -183,16 +204,22 @@ public class RenderGenerationService {
 
         if (section == null) {
             if (this.resultConsumer != null) {
-                this.resultConsumer.accept(BuiltSection.empty(task.position));
+                var empty = BuiltSection.empty(task.position);
+                empty.generation = taskGeneration;
+                this.resultConsumer.accept(empty);
             }
             return;
         }
         section.assertNotFree();
         BuiltSection mesh = null;
+        final long taskPosition = task.position;
 
 
         try {
             mesh = factory.generateMesh(section);
+            if (mesh != null) {
+                mesh.generation = taskGeneration;
+            }
         } catch (IdNotYetComputedException e) {
             {
                 long stamp = this.taskMapLock.writeLock();
@@ -291,13 +318,25 @@ public class RenderGenerationService {
                     this.service.execute();//Since we put in queue, release permit
                 }
             }
-        }
-
-        if (shouldFreeSection) {
-            if (task != null && task.section != null) {
-                this.holdingSectionCount.decrementAndGet();
+        } catch (RuntimeException ex) {
+            // A mesh failure used to escape this method with the task already
+            // removed from taskMap: the node manager then waited forever and the
+            // section reference leaked. Log it, release the section below, and
+            // emit an explicit empty result so the request can complete.
+            Logger.error("Mesh generation failed for " + taskPosition
+                    + "; emitting an empty mesh to unblock the node manager", ex);
+            if (this.resultConsumer != null) {
+                var empty = BuiltSection.empty(taskPosition);
+                empty.generation = taskGeneration;
+                this.resultConsumer.accept(empty);
             }
-            section.release();
+        } finally {
+            if (shouldFreeSection) {
+                if (task != null && task.section != null) {
+                    this.holdingSectionCount.decrementAndGet();
+                }
+                section.release();
+            }
         }
 
         if (mesh != null) {//If the mesh is null it means it didnt finish, so dont submit
@@ -321,6 +360,10 @@ public class RenderGenerationService {
                 isOurs[0] = true;
                 return new BuildTask(p);
             });
+        if (isOurs[0]) {
+            task.generation = GENERATION_COUNTER.incrementAndGet();
+            this.currentGenerations.put(pos, task.generation);
+        }
         this.taskMapLock.unlockWrite(stamp);
 
         if (isOurs[0]) {//If its not ours we dont care about it

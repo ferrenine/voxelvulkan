@@ -45,6 +45,10 @@ void writeCmd(uint idx, uint instance, uint offset, uint quadCount) {
     cmdBuffer[idx] = cmd;
 }
 
+#ifndef TRANSLUCENT_CAPACITY
+#define TRANSLUCENT_CAPACITY 100000
+#endif
+
 void main() {
     if (gl_GlobalInvocationID.x >= translucentDrawCount) {
         return;
@@ -59,5 +63,7 @@ void main() {
     dist = (TRANSLUCENT_WRITE_BASE-1)-min(dist, (TRANSLUCENT_WRITE_BASE-1));
 
     uint drawPtr = atomicAdd(translucentCommandData[dist],1)+TRANSLUCENT_OFFSET;
-    writeCmd(drawPtr, drawId, extractQuadStart(meta), meta.b.x&0xFFFF);
+    if (drawPtr < TRANSLUCENT_OFFSET+TRANSLUCENT_CAPACITY) {
+        writeCmd(drawPtr, drawId, extractQuadStart(meta), meta.b.x&0xFFFF);
+    }
 }

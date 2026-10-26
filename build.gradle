@@ -65,6 +65,7 @@ dependencies {
     // the classes are provided at runtime by VulkanMod's jar-in-jar (META-INF/jars/lwjgl-*.jar).
     compileOnly "org.lwjgl:lwjgl-vulkan:$lwjglVersion"
     compileOnly "org.lwjgl:lwjgl-shaderc:$lwjglVersion"
+    compileOnly "org.lwjgl:lwjgl-vma:$lwjglVersion"
 
     // Dev runtime only — deliberately NOT `include`d, so the published jar does not ship a second
     // copy of the stack next to VulkanMod's own nested jars.

@@ -70,6 +70,7 @@ public class HierarchicalOcclusionTraverser {
             .define("MAX_ITERATIONS", MAX_ITERATIONS)
             .define("LOCAL_SIZE_BITS", LOCAL_WORK_SIZE_BITS)
             .define("MAX_REQUEST_QUEUE_SIZE", MAX_REQUEST_QUEUE_SIZE)
+            .define("MAX_QUEUE_SIZE", MAX_QUEUE_SIZE)
 
             .define("HIZ_BINDING", 0)
 

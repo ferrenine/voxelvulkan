@@ -5,9 +5,11 @@ import voxel.common.util.MemoryBuffer;
 import org.lwjgl.system.MemoryUtil;
 
 
-//Has a base index buffer of 16380 quads, and also a 1 cube byte index buffer at the end
+//Base index buffer for terrain quads: uint32 indices covering 65,536 quads.
+//The byte variants below are still uint16 (they only need a few hundred indices).
 public class SharedIndexBuffer {
-    public static final int CUBE_INDEX_OFFSET = (1<<16)*6*2;
+    /** Quads covered by {@link #INSTANCE}: 65,536 quads = 262,144 uint32 vertices. */
+    public static final int MAX_QUADS = 1 << 16;
     public static final SharedIndexBuffer INSTANCE = new SharedIndexBuffer();
     public static final SharedIndexBuffer INSTANCE_BYTE = new SharedIndexBuffer(true);
     public static final SharedIndexBuffer INSTANCE_BB_BYTE = new SharedIndexBuffer(true, true);
@@ -15,19 +17,16 @@ public class SharedIndexBuffer {
     private final VkBuffer indexBuffer;
 
     public SharedIndexBuffer() {
-        //uint16 index buffer. prep.comp writes firstIndex=(1<<16)*6*2 for the
-        //cube draw; Vulkan interprets firstIndex in elements, so the cube index
-        //block lives at element offset (1<<16)*6*2 (byte offset ×2).
-        this.indexBuffer = new VkBuffer(((1<<16)*6*2 + 6*2*3) * 2L);
-        var quadIndexBuff = generateQuadIndicesShort(16380);
-        var cubeBuff = generateCubeIndexBufferShort();
+        // uint32 indices: the section metadata can describe up to 65,535 quads
+        // (65,536 quads need 262,144 vertices). The old uint16 buffer only had
+        // 16,380 quads of valid indices, so any bucket above that read zeros.
+        this.indexBuffer = new VkBuffer((long)MAX_QUADS * 6L * 4L);
+        var quadIndexBuff = generateQuadIndicesInt(MAX_QUADS);
 
         long ptr = UploadStream.INSTANCE.upload(this.indexBuffer, 0, this.indexBuffer.size());
         quadIndexBuff.cpyTo(ptr);
-        cubeBuff.cpyTo(((1<<16)*6*2)*2L + ptr);
 
         quadIndexBuff.free();
-        cubeBuff.free();
         UploadStream.INSTANCE.commit();
     }
 
@@ -329,12 +328,12 @@ public class SharedIndexBuffer {
     }
 
     public static MemoryBuffer generateQuadIndicesInt(int quadCount) {
-        MemoryBuffer buffer = new MemoryBuffer(quadCount * 6L * 2);
+        MemoryBuffer buffer = new MemoryBuffer(quadCount * 6L * 4);
         long ptr = buffer.address;
         for(int i = 0; i < quadCount*4; i += 4) {
-            MemoryUtil.memPutInt(ptr + (0*4), i);
-            MemoryUtil.memPutInt(ptr + (1*4), (i + 1));
-            MemoryUtil.memPutInt(ptr + (2*4), (i + 2));
+            MemoryUtil.memPutInt(ptr + (0*4), (i + 1));
+            MemoryUtil.memPutInt(ptr + (1*4), (i + 2));
+            MemoryUtil.memPutInt(ptr + (2*4), (i + 0));
             MemoryUtil.memPutInt(ptr + (3*4), (i + 1));
             MemoryUtil.memPutInt(ptr + (4*4), (i + 3));
             MemoryUtil.memPutInt(ptr + (5*4), (i + 2));

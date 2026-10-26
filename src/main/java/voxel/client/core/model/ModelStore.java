@@ -28,8 +28,8 @@ public class ModelStore {
     final VkTexture textures;
 
     public ModelStore() {
-        this.modelBuffer = new VkBuffer(MODEL_SIZE * (1<<16)).name("ModelData");
-        this.modelColourBuffer = new VkBuffer(4 * (1<<16)).name("ModelColour");
+        this.modelBuffer = new VkBuffer(MODEL_SIZE * ModelFactory.MAX_MODEL_COUNT).name("ModelData");
+        this.modelColourBuffer = new VkBuffer(4L * ModelFactory.MAX_BIOME_COLOUR_SLOTS).name("ModelColour");
         this.textures = new VkTexture()
                 .store(GL_RGBA8, Integer.numberOfTrailingZeros(MODEL_TEXTURE_SIZE),
                         MODEL_TEXTURE_SIZE*3*256, MODEL_TEXTURE_SIZE*2*256)

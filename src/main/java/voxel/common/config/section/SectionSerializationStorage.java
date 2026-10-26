@@ -29,7 +29,9 @@ public class SectionSerializationStorage extends SectionStorage {
             if (!SectionSerializer.deserialize(into, data)) {
                 this.backend.deleteSectionData(into.key);
                 //TODO: regenerate the section from children
-                Arrays.fill(into.materializeData(), Mapper.AIR);
+                synchronized (into) {
+                    Arrays.fill(into.materializeData(), Mapper.AIR);
+                }
                 Logger.error("Section " + into.lvl + ", " + into.x + ", " + into.y + ", " + into.z + " was unable to load, removing");
                 return -1;
             } else {

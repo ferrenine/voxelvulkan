@@ -6,9 +6,16 @@ import org.lwjgl.system.MemoryUtil;
 public final class NodeStore {
     public static final int EMPTY_GEOMETRY_ID = -1;
     public static final int NODE_ID_MSK = ((1<<24)-1);
-    public static final int REQUEST_ID_MSK = ((1<<16)-1);
+    /**
+     * Request ids are packed in the low 24 bits of the request word. They used
+     * to be 16 bits wide, but bit 16 doubles as the allChildrenAreLeaf flag and
+     * ids >= 65,536 silently wrapped into request 0 (or corrupted the leaf
+     * flag). Both request lists use the same 24-bit id space as node ids.
+     */
+    public static final int REQUEST_ID_MSK = ((1<<24)-1);
     public static final int GEOMETRY_ID_MSK = (1<<24)-1;
     public static final int MAX_GEOMETRY_ID = (1<<24)-3;
+    private static final int ALL_CHILDREN_ARE_LEAF_BIT = 32;
     private static final int SENTINEL_NULL_GEOMETRY_ID = (1<<24)-1;
     private static final int SENTINEL_EMPTY_GEOMETRY_ID = (1<<24)-2;
     private static final int SENTINEL_NULL_NODE_ID = NODE_ID_MSK;
@@ -176,6 +183,9 @@ public final class NodeStore {
     }
 
     public void setNodeRequest(int node, int requestId) {
+        if (requestId < 0 || requestId > REQUEST_ID_MSK) {
+            throw new IllegalArgumentException("Request id out of range: " + requestId);
+        }
         int id = id2idx(node)+2;
         long data = this.localNodeData[id];
         data &= ~REQUEST_ID_MSK;
@@ -199,12 +209,12 @@ public final class NodeStore {
 
     //TODO: Implement this in node manager
     public void setAllChildrenAreLeaf(int nodeId, boolean state) {
-        this.localNodeData[id2idx(nodeId)+2] &= ~(1L<<16);
-        this.localNodeData[id2idx(nodeId)+2] |= state?1L<<16:0;
+        this.localNodeData[id2idx(nodeId)+2] &= ~(1L<<ALL_CHILDREN_ARE_LEAF_BIT);
+        this.localNodeData[id2idx(nodeId)+2] |= state?1L<<ALL_CHILDREN_ARE_LEAF_BIT:0;
     }
 
     public boolean getAllChildrenAreLeaf(int nodeId) {
-        return ((this.localNodeData[id2idx(nodeId)+2]>>16)&1)!=0;
+        return ((this.localNodeData[id2idx(nodeId)+2]>>ALL_CHILDREN_ARE_LEAF_BIT)&1)!=0;
     }
 
     public void markNodeGeometryInFlight(int nodeId) {

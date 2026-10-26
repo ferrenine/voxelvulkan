@@ -257,7 +257,9 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
     protected void free0() {
         this.fb.free();
         this.blitUniformBuffer.free();
-        this.sectionRenderer.free();
+        if (this.sectionRenderer != null) {
+            this.sectionRenderer.free();
+        }
         this.depthCopy.delete();
         super.free0();
     }

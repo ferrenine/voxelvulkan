@@ -4,6 +4,7 @@ import voxel.common.Logger;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.Vulkan;
 import net.vulkanmod.vulkan.device.DeviceManager;
+import net.vulkanmod.vulkan.memory.MemoryManager;
 import net.vulkanmod.vulkan.queue.CommandPool;
 import net.vulkanmod.vulkan.queue.Queue;
 import org.lwjgl.system.MemoryStack;
@@ -31,6 +32,33 @@ public final class VkVoxel {
     public static final long UINT64_MAX = ~0L;
 
     /**
+     * Upper bound of VulkanMod's swapchain frame queue (it can grow from 2 to 5
+     * when the swapchain is rebuilt). Descriptor rings are allocated for this
+     * many slots so a resize cannot move currentFrame past the pool.
+     */
+    public static final int MAX_FRAME_SLOTS = 5;
+
+    private static volatile boolean drawIndirectCountSupported;
+    private static volatile boolean hostQueryResetSupported;
+
+    /** Recorded by the DeviceManager mixin before the logical device is created. */
+    public static void setDrawIndirectCountSupported(boolean supported) {
+        drawIndirectCountSupported = supported;
+    }
+
+    public static boolean isDrawIndirectCountSupported() {
+        return drawIndirectCountSupported;
+    }
+
+    public static void setHostQueryResetSupported(boolean supported) {
+        hostQueryResetSupported = supported;
+    }
+
+    public static boolean isHostQueryResetSupported() {
+        return hostQueryResetSupported;
+    }
+
+    /**
      * Monotonic frame counter, incremented by the renderer hook on every frame
      * begin. Used to implement frame-based completion polling (VulkanMod waits
      * each frame's fence {@code framesNum} frames later, so any command recorded
@@ -38,6 +66,17 @@ public final class VkVoxel {
      * at least {@code framesNum} frames past {@code N}).
      */
     private static long frameEpoch;
+    /**
+     * Highest frame epoch whose command buffer has actually been submitted to
+     * the graphics queue (updated from Renderer.submitFrame / flushCmds).
+     */
+    private static long submittedEpoch;
+    /**
+     * Highest epoch known to be complete on the GPU. Only advanced by a real
+     * {@code vkDeviceWaitIdle}; the frame counter is never jumped ahead to fake
+     * completion for work that is still being recorded.
+     */
+    private static volatile long completedEpoch;
 
     private VkVoxel() {
     }
@@ -47,8 +86,20 @@ public final class VkVoxel {
         frameEpoch++;
     }
 
+    /** Called after VulkanMod submitted the current frame's command buffer. */
+    public static void onFrameSubmitted() {
+        if (frameEpoch > submittedEpoch) {
+            submittedEpoch = frameEpoch;
+        }
+    }
+
     public static long frameEpoch() {
         return frameEpoch;
+    }
+
+    /** Epochs up to and including this value are known complete on the GPU. */
+    public static long completedEpoch() {
+        return completedEpoch;
     }
 
     public static VkDevice device() {
@@ -108,6 +159,39 @@ public final class VkVoxel {
         cb.reset();
     }
 
+    /**
+     * Destroys an image view after the frames that may still reference it have
+     * retired. The underlying {@code VulkanImage} is released through
+     * VulkanMod's deferred free queue, so destroying the view immediately (as
+     * the old GL-style wrapper did) can leave a descriptor set/command buffer
+     * pointing at a dead view.
+     */
+    public static void destroyImageViewDeferred(long view) {
+        if (view == VK_NULL_HANDLE) {
+            return;
+        }
+        MemoryManager memoryManager = null;
+        try {
+            memoryManager = MemoryManager.getInstance();
+        } catch (Throwable ignored) {
+        }
+        if (memoryManager != null) {
+            memoryManager.addFrameOp(() -> destroyImageViewNow(view));
+        } else {
+            destroyImageViewNow(view);
+        }
+    }
+
+    private static void destroyImageViewNow(long view) {
+        try {
+            VkDevice device = device();
+            if (device != null) {
+                vkDestroyImageView(device, view, null);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     private static final java.lang.reflect.Field F_BOUND_PIPELINE_HANDLE;
     static {
         java.lang.reflect.Field f = null;
@@ -144,17 +228,26 @@ public final class VkVoxel {
         }
     }
 
-    /** Waits for all GPU work to complete (maps the old {@code glFinish}). */
+    /** Waits for all submitted GPU work to complete (maps the old {@code glFinish}). */
     public static void waitIdle() {
         try {
             VkDevice device = device();
             if (device != null) {
-                vkDeviceWaitIdle(device);
+                int res = vkDeviceWaitIdle(device);
+                if (res != VK_SUCCESS) {
+                    Logger.warn("vkDeviceWaitIdle failed: " + res);
+                    return;
+                }
             }
         } catch (Throwable t) {
+            // Do not claim any completion when the wait itself failed.
             Logger.warn("vkDeviceWaitIdle failed: " + t);
+            return;
         }
-        frameEpoch += Math.max(1, framesNum()) + 2L;
+        long submitted = submittedEpoch;
+        if (submitted > completedEpoch) {
+            completedEpoch = submitted;
+        }
     }
 
     // ------------------------------------------------------------------

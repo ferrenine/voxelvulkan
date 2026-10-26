@@ -8,7 +8,7 @@ import voxel.client.vk.VkVoxel;
 import voxel.common.Logger;
 import voxel.common.util.AllocationArena;
 import voxel.common.util.MemoryBuffer;
-import net.vulkanmod.vulkan.Vulkan;
+import net.vulkanmod.vulkan.device.DeviceManager;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -69,9 +69,17 @@ public class UploadStream {
         if (size > this.uploadBuffer.size()) {
             throw new IllegalArgumentException();
         }
-        //Force natural size alignment, this should ensure that _all_ allocations are aligned to this size, note, this only effects the allocation block
-        // not how much data is moved or copied
-        size = (size + 15) & ~15;//Alignment to 16 bytes
+        // Raw upload addresses are used directly as VkDescriptorBufferInfo.offset
+        // (ssboRaw in NodeCleaner / AsyncNodeManager), so they must satisfy the
+        // device's minStorageBufferOffsetAlignment: 16 B on NVIDIA, 64 B on Intel.
+        // Rounding every allocation keeps the arena's block boundaries aligned by
+        // induction, including the tail-growth and free-gap reuse paths.
+        final int alignment = allocationAlignment();
+        long alignedSize = ((long) size + (alignment - 1)) & ~(long) (alignment - 1);
+        if (alignedSize > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Upload allocation too large: " + size);
+        }
+        size = (int) alignedSize;
 
         long addr;
         if (this.caddr == -1 || !this.allocationArena.expand(this.caddr, (int) size)) {
@@ -82,14 +90,18 @@ public class UploadStream {
                 // since commit is an explicit op saying we are done any to push upload everything
                 //We dont commit since we dont want to invalidate existing upload pointers
                 Logger.error("Upload stream full, preemptively committing, this could cause bad things to happen");
-                int attempts = 10;
-                while (--attempts != 0 && this.caddr == SIZE_LIMIT) {
-                    Vulkan.waitIdle();
-                    this.tick(false);
-                    this.caddr = this.allocationArena.alloc((int) size);
-                }
+                // One real drain is enough: waitIdle retires every batch whose
+                // frame was actually submitted, and tick() frees all of them.
+                // Retrying in a loop cannot make progress inside a single
+                // recording (nothing is submitted while we spin).
+                VkVoxel.waitIdle();
+                this.tick(false);
+                this.caddr = this.allocationArena.alloc((int) size);
                 if (this.caddr == SIZE_LIMIT) {
-                    throw new IllegalStateException("Could not allocate memory segment big enough for upload even after force flush");
+                    throw new IllegalStateException("Could not allocate " + size
+                            + " bytes in the upload stream even after waiting for the GPU; the"
+                            + " frame is using more staging memory than the " + this.uploadBuffer.size()
+                            + "-byte buffer");
                 }
             }
             this.thisFrameAllocations.add(this.caddr);
@@ -103,8 +115,20 @@ public class UploadStream {
         if (this.caddr + size > this.uploadBuffer.size()) {
             throw new IllegalStateException();
         }
+        if ((addr & (alignment - 1)) != 0) {
+            throw new IllegalStateException("Upload allocation " + addr + " is not " + alignment + "-byte aligned");
+        }
 
         return addr;
+    }
+
+    /** Descriptor buffer-offset alignment of the active device. */
+    private static int allocationAlignment() {
+        var props = DeviceManager.deviceProperties;
+        if (props == null) {
+            return 16;
+        }
+        return (int) Math.max(16L, props.limits().minStorageBufferOffsetAlignment());
     }
 
     public void commit() {
@@ -129,6 +153,19 @@ public class UploadStream {
     }
 
     private void recordCopies(VkCommandBuffer cb) {
+        // WAR: earlier shader/draw/transfer reads of the destination ranges must
+        // complete before the copies overwrite them. Without this, a frame-N copy
+        // can race a frame-N-1 draw (or an earlier command in this buffer).
+        VkVoxel.memoryBarrier(cb,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
+                        | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT
+                        | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_UNIFORM_READ_BIT
+                        | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT
+                        | VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT
+                        | VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_ACCESS_TRANSFER_WRITE_BIT);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
             for (var entry : this.uploadList) {
@@ -136,14 +173,17 @@ public class UploadStream {
                 vkCmdCopyBuffer(cb, this.uploadBuffer.id, entry.target.id, region);
             }
         }
-        // Make the copies visible to subsequent shader/vertex/indirect reads.
+        // Make the copies visible to every consumer stage that can read an
+        // uploaded buffer: vertex/fragment/compute, vertex input (index/vertex),
+        // indirect draws and later transfers.
         VkVoxel.memoryBarrier(cb,
                 VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT
-                        | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT
-                        | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                        | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                        | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_UNIFORM_READ_BIT
+                        | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT
                         | VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
     }
 

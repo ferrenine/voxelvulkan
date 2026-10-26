@@ -104,6 +104,15 @@ public class GPUTiming {
             Logger.warn("GPU timestamps are not supported by this device");
             return false;
         }
+        if (!VkVoxel.isHostQueryResetSupported()) {
+            // marker() resets a slot with the host-side vkResetQueryPool, which
+            // requires the Vulkan 1.2 hostQueryReset feature. Without it the
+            // call is invalid, so keep the profiler off instead of spamming
+            // validation errors.
+            this.disabled = true;
+            Logger.warn("GPU timings disabled: hostQueryReset is not available");
+            return false;
+        }
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkQueryPoolCreateInfo info = VkQueryPoolCreateInfo.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO)

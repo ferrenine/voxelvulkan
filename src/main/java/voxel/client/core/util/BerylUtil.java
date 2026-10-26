@@ -57,6 +57,7 @@ public class BerylUtil {
     private static final Object BERYL_CONFIG_OBJ;
     private static final Field F_SHADOW_RENDER_DISTANCE;
     private static boolean SHADOW_MAP_WARNED = false;
+    private static int LAST_LOGGED_SHADOW_DISTANCE = -1;
 
     static {
         Method getStage = null;
@@ -406,14 +407,14 @@ public class BerylUtil {
     }
 
     /**
-     * Dynamically tunes Beryl's shadow-map projection depth bounds, fish-eye distortion
-     * and shadow bias based on camera altitude above terrain.
+     * Altitude-only compatibility shim for Beryl's shadow projection.
      *
-     * <p>When the player flies up high, Beryl's default camera-centered fish-eye shadow
-     * distortion ({@code ~0.925}) wastes 93% of shadow-map resolution on empty mid-air
-     * around the camera while stretching ground shadow texels by 30x-50x (causing
-     * concentric shadow-acne ripples), and its {@code [-100, 192]} depth range clips
-     * the ground into solid black shadow above 192 blocks altitude.</p>
+     * <p>At ground level this returns immediately and leaves Beryl's state
+     * completely untouched: we are a read-only consumer of Beryl in normal play.
+     * The correction only runs above 6 blocks of altitude, where Beryl's
+     * camera-centred fish-eye distortion ({@code ~0.925}) wastes 93% of
+     * shadow-map resolution on empty mid-air and its {@code [-100, 192]} depth
+     * range clips the ground into solid black shadow.</p>
      */
     public static void tuneBerylShadowParameters() {
         if (!berylShaderEnabled() || GET_STAGE == null) {
@@ -425,11 +426,16 @@ public class BerylUtil {
                 return;
             }
             var mc = Minecraft.getInstance();
-            if (BERYL_CONFIG_OBJ != null && F_SHADOW_RENDER_DISTANCE != null && mc.options != null) {
-                int targetShadowDist = Math.max(F_SHADOW_RENDER_DISTANCE.getInt(BERYL_CONFIG_OBJ), mc.options.getEffectiveRenderDistance() + 2);
-                F_SHADOW_RENDER_DISTANCE.setInt(BERYL_CONFIG_OBJ, targetShadowDist);
-                if (F_ORTHO_HALF_LENGTH != null) {
-                    F_ORTHO_HALF_LENGTH.setFloat(null, targetShadowDist * 16.0f);
+            // Read-only: report which distance Beryl will actually use. This never
+            // writes to Beryl's config, so beryl_settings.json stays authoritative.
+            if (BERYL_CONFIG_OBJ != null && F_SHADOW_RENDER_DISTANCE != null) {
+                int configured = F_SHADOW_RENDER_DISTANCE.getInt(BERYL_CONFIG_OBJ);
+                int targetShadowDist = Mth.clamp(configured, 2, 24);
+                if (targetShadowDist != LAST_LOGGED_SHADOW_DISTANCE) {
+                    LAST_LOGGED_SHADOW_DISTANCE = targetShadowDist;
+                    int vanillaRd = mc.options != null ? mc.options.getEffectiveRenderDistance() : -1;
+                    Logger.info("[Beryl] shadow render distance: " + targetShadowDist
+                            + " chunks (config " + configured + ", vanilla " + vanillaRd + ")");
                 }
             }
             float altitude = 0.0f;
@@ -437,6 +443,19 @@ public class BerylUtil {
                 var camPos = mc.gameRenderer.getMainCamera().position();
                 int surfaceY = mc.level.getHeight(Heightmap.Types.MOTION_BLOCKING, Mth.floor(camPos.x), Mth.floor(camPos.z));
                 altitude = (float) Math.max(0.0, camPos.y - surfaceY);
+            }
+
+            // Ground level: Beryl's own projection is correct here, so leave its
+            // shadow state completely untouched. The correction below only exists
+            // because Beryl's fixed [-100, 192] depth range and camera-centred
+            // fish-eye distortion break when the camera is far above the terrain.
+            if (altitude <= 6.0f) {
+                return;
+            }
+
+            if (F_ORTHO_HALF_LENGTH != null && BERYL_CONFIG_OBJ != null && F_SHADOW_RENDER_DISTANCE != null) {
+                F_ORTHO_HALF_LENGTH.setFloat(null, Mth.clamp(
+                        F_SHADOW_RENDER_DISTANCE.getInt(BERYL_CONFIG_OBJ), 2, 24) * 16.0f);
             }
 
             float altFactor = Math.clamp((altitude - 6.0f) / 100.0f, 0.0f, 1.0f);

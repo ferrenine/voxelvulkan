@@ -91,12 +91,14 @@ public class SectionSerializer {
         final long lutBasePtr = ptr + WorldSection.SECTION_VOLUME * 2;
         if (section.lvl == 0) {
             int nonEmptyBlockCount = 0;
-            final var blockData = section.materializeData();//must not write into SHARED_AIR_DATA
-            for (int i = 0; i < WorldSection.SECTION_VOLUME; i++) {
-                final short lutId = MemoryUtil.memGetShort(ptr); ptr += 2;
-                final long blockId = MemoryUtil.memGetLong(lutBasePtr + Short.toUnsignedLong(lutId) * 8L);
-                nonEmptyBlockCount += Mapper.isAir(blockId) ? 0 : 1;
-                blockData[i] = blockId;
+            synchronized (section) {
+                final var blockData = section.materializeData();//must not write into SHARED_AIR_DATA
+                for (int i = 0; i < WorldSection.SECTION_VOLUME; i++) {
+                    final short lutId = MemoryUtil.memGetShort(ptr); ptr += 2;
+                    final long blockId = MemoryUtil.memGetLong(lutBasePtr + Short.toUnsignedLong(lutId) * 8L);
+                    nonEmptyBlockCount += Mapper.isAir(blockId) ? 0 : 1;
+                    blockData[i] = blockId;
+                }
             }
             section.nonEmptyBlockCount = nonEmptyBlockCount;
             if (nonEmptyBlockCount > 0) {
@@ -104,13 +106,15 @@ public class SectionSerializer {
             }
         } else {
             byte inferredChildren = section.nonEmptyChildren;
-            final var blockData = section.materializeData();
-            for (int i = 0; i < WorldSection.SECTION_VOLUME; i++) {
-                final long blockId = MemoryUtil.memGetLong(lutBasePtr + Short.toUnsignedLong(MemoryUtil.memGetShort(ptr)) * 8L); ptr += 2;
-                blockData[i] = blockId;
-                if (!Mapper.isAir(blockId)) {
-                    int octant = ((i >> 4) & 1) | ((i >> 8) & 2) | ((i >> 12) & 4);
-                    inferredChildren |= (byte) (1 << octant);
+            synchronized (section) {
+                final var blockData = section.materializeData();
+                for (int i = 0; i < WorldSection.SECTION_VOLUME; i++) {
+                    final long blockId = MemoryUtil.memGetLong(lutBasePtr + Short.toUnsignedLong(MemoryUtil.memGetShort(ptr)) * 8L); ptr += 2;
+                    blockData[i] = blockId;
+                    if (!Mapper.isAir(blockId)) {
+                        int octant = ((i >> 4) & 1) | ((i >> 8) & 2) | ((i >> 12) & 4);
+                        inferredChildren |= (byte) (1 << octant);
+                    }
                 }
             }
             section.nonEmptyChildren = inferredChildren;

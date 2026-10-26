@@ -18,6 +18,10 @@ import static org.lwjgl.vulkan.VK10.vkGetFenceStatus;
  * matches the polling usage in the upload/download streams ("has the work
  * enqueued in earlier frames finished?").</p>
  *
+ * <p>A real device-idle wait also marks submitted epochs complete
+ * ({@link VkVoxel#completedEpoch()}); the frame counter itself is never jumped
+ * ahead, so work still being recorded cannot be mistaken for finished.</p>
+ *
  * <p>If the frame hook is not active yet (frame epoch still zero), the fence
  * falls back to a one-shot submission fence.</p>
  */
@@ -56,6 +60,14 @@ public class VkFence extends TrackedObject {
                 throw new IllegalStateException("Polling fence failed: " + res);
             }
             return this.signaled;
+        }
+        // A real vkDeviceWaitIdle after this batch's frame was submitted proves
+        // the work is done even when the frame counter cannot advance (paused /
+        // minimised rendering). Never use this for the frame that is still being
+        // recorded: submittedEpoch only moves on a real vkQueueSubmit.
+        if (this.epochAtCreation <= VkVoxel.completedEpoch()) {
+            this.signaled = true;
+            return true;
         }
         long framesToWait = Math.max(VkFence.framesToWait, VkVoxel.framesNum());
         if (VkVoxel.frameEpoch() - this.epochAtCreation >= framesToWait) {

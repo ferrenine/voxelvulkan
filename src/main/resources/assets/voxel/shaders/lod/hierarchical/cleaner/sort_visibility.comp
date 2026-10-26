@@ -16,16 +16,31 @@ layout(binding = OUTPUT_BUFFER_BINDING, std430) restrict volatile buffer Minimum
     uint minVisIds[OUTPUT_SIZE];
 };
 
+layout(push_constant) uniform SortConstants {
+    uint nodeCount;
+};
+
+// visibility[] has one entry per node id. Ids in the sort buffers may carry
+// bit31 as the "came from the global output" flag, and the empty global slot
+// is nodeCount (one past the end), so every dereference goes through here.
+uint visOf(uint rawId) {
+    uint id = rawId & ((1u<<31)-1);
+    return id < nodeCount ? visibility[id] : uint(-1);
+}
+
 //Returns the id of the max value
 uint atomicDerefMaxExchangeGlobal(uint atId, uint id) {
-    const uint value = visibility[id];
+    if (id == uint(-1)) {
+        return uint(-1);
+    }
+    const uint value = visOf(id);
     while (true) {
         const uint existingId = minVisIds[atId];//TODO: check that this does what we want, and that it obtains the value of atValue, at this point
-        if (existingId == id) {//If we are trying to insert self, return -1
+        if ((existingId & ((1u<<31)-1)) == (id & ((1u<<31)-1))) {//If we are trying to insert self, return -1
             return uint(-1);
         }
         //Check if the value is less than the dereferenced value, if its not, return our own id
-        if (visibility[existingId&((1u<<31)-1)] <= value) {//Remove the flag bit
+        if (visOf(existingId) <= value) {//Remove the flag bit
             return id;
         }
         //Attempt to swap, since we know we are less than the existingId
@@ -56,37 +71,49 @@ shared uint initalSort[OUTPUT_SIZE];
 
 
 //Returns the id of the max value
-uint atomicDerefMaxExchangeLocal(uint atId, uint id) {
-    const uint value = visibility[id];
+uint atomicDerefMaxExchangeLocal(uint atId, uint rawId) {
+    if (rawId == uint(-1)) {
+        return uint(-1);
+    }
+    // The bit31 "external" flag must survive reinsertion: an external id that
+    // is displaced once must stay skippable in the final global pass, otherwise
+    // it can be written to the output a second time.
+    const uint id = rawId & ((1u<<31)-1);
+    const uint value = visOf(id);
     while (true) {
-        const uint existingId = initalSort[atId];//TODO: check that this does what we want, and that it obtains the value of atValue, at this point
+        const uint existingRaw = initalSort[atId];
+        const uint existingId = existingRaw & ((1u<<31)-1);
         if (existingId == id) {//If we are trying to insert self, return -1
             return uint(-1);
         }
         //Check if the value is less than the dereferenced value, if its not, return our own id
-        if (visibility[existingId&((1u<<31)-1)] <= value) {//Remove the flag bit
-            return id;
+        if (visOf(existingId) <= value) {//Remove the flag bit
+            return rawId;
         }
-        //Attempt to swap, since we know we are less than the existingId
-        const uint c = atomicCompSwap(initalSort[atId], existingId, id);
+        //Attempt to swap, since we know we are less than the existingId.
+        //CAS must compare the raw word: external entries carry bit31.
+        const uint c = atomicCompSwap(initalSort[atId], existingRaw, rawId);
         //Check if we did swap, else if we failed (or got reswapped else where) recheck
 
         //We did swap, (since the original mem contents was the existing id)
         // which means existingId is now the max of the ptr
-        if (c == existingId) {
-            return existingId;
+        if (c == existingRaw) {
+            return existingRaw;
         }
     }
 }
 void bubbleSortInital(uint vis, uint id) {
     uint start = 0;
     //Fast path cut out half the ops
-    if (visibility[initalSort[(OUTPUT_SIZE-1)>>1]] <= vis) {//Check if we are more than half way
+    if (visOf(initalSort[(OUTPUT_SIZE-1)>>1]) <= vis) {//Check if we are more than half way
         start = (OUTPUT_SIZE-1)>>1;
     }
 
     for (uint i = start; i < OUTPUT_SIZE; i++) {
         id = atomicDerefMaxExchangeLocal(i, id);
+        if (id == uint(-1)) {
+            break;
+        }
     }
 }
 
@@ -125,12 +152,15 @@ void main() {
     //Do insertion and sort into local shared buffer
     for (uint i = 0; i < ELEMS_PER_THREAD; i++) {
         uint id = gl_GlobalInvocationID.x*ELEMS_PER_THREAD+i;
-        uint vis = visibility[id];
+        if (id >= nodeCount) {
+            continue;
+        }
+        uint vis = visOf(id);
         if (vis == uint(-1)) {
             continue;
         }
         //Quick exit if this element is already bigger than global output
-        if (visibility[minVisIds[OUTPUT_SIZE-1]] <= vis) {
+        if (visOf(minVisIds[OUTPUT_SIZE-1]) <= vis) {
             continue;
         }
         if (!shouldSortId(id)) {
@@ -152,13 +182,13 @@ void main() {
             //The flag being external was set, meaning we should NOT insert this element
             continue;
         }
-        uint vis = visibility[sid];
+        uint vis = visOf(sid);
         //If output is already smaller than self
-        if (visibility[minVisIds[OUTPUT_SIZE-1]] <= vis) {
+        if (visOf(minVisIds[OUTPUT_SIZE-1]) <= vis) {
             continue;
         }
         uint start = id;
-        if (visibility[minVisIds[(id+OUTPUT_SIZE)>>1]] <= vis) {//Try to skip
+        if (visOf(minVisIds[(id+OUTPUT_SIZE)>>1]) <= vis) {//Try to skip
             start = (id+OUTPUT_SIZE)>>1;
         }
         bubbleSortGlobal(start, sid);//Insert into global

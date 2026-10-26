@@ -42,7 +42,7 @@ public class MixinClientChunkCache implements ICheekyClientChunkCache {
                                               Map<Heightmap.Types, long[]> heightmaps,
                                               Consumer<ClientboundLevelChunkPacketData.BlockEntityTagOutput> blockEntities,
                                               CallbackInfoReturnable<LevelChunk> cir) {
-        if (VoxelConfig.CONFIG.ingestEnabled) {
+        if (VoxelConfig.CONFIG.isIngestEnabled()) {
             LevelChunk existing = this.storage.getChunk(this.storage.getIndex(x, z));
             if (existing != null) {
                 VoxelIngestService.tryAutoIngestChunk(existing);
@@ -55,7 +55,7 @@ public class MixinClientChunkCache implements ICheekyClientChunkCache {
                                      Map<Heightmap.Types, long[]> heightmaps,
                                      Consumer<ClientboundLevelChunkPacketData.BlockEntityTagOutput> blockEntities,
                                      CallbackInfoReturnable<LevelChunk> cir) {
-        if (VoxelConfig.CONFIG.ingestEnabled) {
+        if (VoxelConfig.CONFIG.isIngestEnabled()) {
             LevelChunk chunk = cir.getReturnValue();
             if (chunk != null) {
                 VoxelIngestService.tryAutoIngestChunk(chunk);
@@ -65,7 +65,7 @@ public class MixinClientChunkCache implements ICheekyClientChunkCache {
 
     @Inject(method = "drop", at = @At("HEAD"))
     public void voxel$captureChunkBeforeUnload(ChunkPos pos, CallbackInfo ci) {
-        if (VoxelConfig.CONFIG.ingestEnabled && !BOBBY_INSTALLED) {
+        if (VoxelConfig.CONFIG.isIngestEnabled() && !BOBBY_INSTALLED) {
             var chunk = this.voxel$cheekyGetChunk(pos.x, pos.z);
             if (chunk != null) {
                 VoxelIngestService.tryAutoIngestChunk(chunk);

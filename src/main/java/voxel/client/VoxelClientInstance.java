@@ -67,7 +67,7 @@ public class VoxelClientInstance extends VoxelInstance {
 
     @Override
     public boolean isIngestEnabled(WorldIdentifier worldId) {
-        return (!this.noIngestOverride) && VoxelConfig.CONFIG.ingestEnabled;
+        return (!this.noIngestOverride) && VoxelConfig.CONFIG.isIngestEnabled();
     }
 
     private static class Config {

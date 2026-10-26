@@ -5,6 +5,7 @@
   "client": [
     "MixinVkDeviceManager",
     "MixinVkImageBuilder",
+    "MixinVkMemoryManager",
     "MixinVkRenderer",
     "MixinVkRenderSection",
     "MixinVkWorldRenderer"

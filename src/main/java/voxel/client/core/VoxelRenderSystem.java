@@ -15,6 +15,7 @@ import voxel.client.core.rendering.Viewport;
 import voxel.client.core.rendering.ViewportSelector;
 import voxel.client.core.rendering.bounding.BoundRenderer;
 import voxel.client.core.rendering.bounding.ChunkBoundStore;
+import voxel.client.core.rendering.building.RenderDataFactory;
 import voxel.client.core.rendering.building.RenderGenerationService;
 import voxel.client.core.rendering.hierarchical.AsyncNodeManager;
 import voxel.client.core.rendering.hierarchical.HierarchicalOcclusionTraverser;
@@ -48,21 +49,45 @@ public class VoxelRenderSystem {
     private long lastStatsDump;
     private final WorldEngine worldIn;
 
-    private final ModelBakerySubsystem modelService;
-    private final RenderGenerationService renderGen;
-    private final IGeometryData geometryData;
-    private final AsyncNodeManager nodeManager;
-    private final NodeCleaner nodeCleaner;
-    private final HierarchicalOcclusionTraverser traversal;
+    private ModelBakerySubsystem modelService;
+    private RenderGenerationService renderGen;
+    private IGeometryData geometryData;
+    private AsyncNodeManager nodeManager;
+    private NodeCleaner nodeCleaner;
+    private HierarchicalOcclusionTraverser traversal;
 
-    private final RenderDistanceTracker renderDistanceTracker;
-    public final ChunkBoundStore boundStore;
-    private final BoundRenderer boundRenderer;
+    private RenderDistanceTracker renderDistanceTracker;
+    public ChunkBoundStore boundStore;
+    private BoundRenderer boundRenderer;
 
-    private final ViewportSelector<?> viewportSelector;
+    // Low-overhead frame-spike diagnostics. The full frame interval is measured
+    // between LOD passes; the previous Voxel pass duration tells us whether the
+    // spike came from our pipeline or from Beryl/vanilla/other work.
+    private long lastOpaqueStartNanos;
+    private long lastOpaqueDurationNanos;
+    private long lastSpikeLogNanos;
 
-    private final AbstractRenderPipeline pipeline;
-    private final AbstractSectionRenderer<?, ?> sectionRenderer;
+    // Frame decomposition: pre (Beryl shadow + vanilla terrain before us),
+    // voxel (our pass), post (bloom/final/submit + fence wait + present).
+    private long frameBeginNanos;
+    private long firstSectionLayerNanos;
+    private long lastOpaqueEndNanos;
+    private long lastPreVoxelNanos;
+    private long lastShadowNanos;
+    private long lastVanillaNanos;
+    private long lastPostVoxelNanos;
+
+    // Rolling frame-time window. Every FRAME_HISTORY samples we log
+    // avg/p50/p95/p99/max, so "1% low" is a hard number in the log instead of a
+    // screenshot of F3. 600 frames is ~20 s at 30 FPS.
+    private static final int FRAME_HISTORY = 600;
+    private final long[] frameHistoryNanos = new long[FRAME_HISTORY];
+    private int frameHistoryIndex;
+
+    private ViewportSelector<?> viewportSelector;
+
+    private AbstractRenderPipeline pipeline;
+    private AbstractSectionRenderer<?, ?> sectionRenderer;
 
     //LOD casters in Beryl's shadow pass
     private boolean shadowCastersFailed;
@@ -136,15 +161,79 @@ public class VoxelRenderSystem {
             this.boundStore = new ChunkBoundStore();
             this.boundRenderer = new BoundRenderer(this.pipeline);
 
-            // Start the async worker only after every allocation/shader compile
+            // Start the workers only after every allocation/shader compile
             // succeeded, so a failed reload cannot leave a thread running
             // against a world that is about to be released.
+            this.modelService.start();
             this.nodeManager.start();
 
             Logger.info("Voxel render system created with " + geometryCapacity + " geometry capacity, using pipeline '" + this.pipeline.getClass().getSimpleName() + "' with renderer '" + sectionRenderer.getClass().getSimpleName() + "'");
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
+            this.rollbackConstruction();
             world.releaseRef();
             throw e;
+        }
+    }
+
+    /**
+     * Inverse-order cleanup for a constructor that failed after allocating
+     * some (but not all) of the renderer's GPU resources. The workers are
+     * started last, but ModelFactory may already own buffers and the node
+     * manager may already own queues, so every stage is released with its own
+     * guard; one failing free must not hide the rest.
+     */
+    private void rollbackConstruction() {
+        if (this.worldIn != null) {
+            try {
+                this.worldIn.setDirtyCallback(null);
+                var mapper = this.worldIn.getMapper();
+                mapper.setBiomeCallback(null);
+                mapper.setStateCallback(null);
+            } catch (Throwable t) {
+                Logger.warn("Rollback: could not detach world callbacks: " + t);
+            }
+        }
+        freeQuietly("modelService", () -> {
+            if (this.modelService != null) this.modelService.shutdown();
+        });
+        freeQuietly("renderGen", () -> {
+            if (this.renderGen != null) this.renderGen.shutdown();
+        });
+        freeQuietly("nodeManager", () -> {
+            if (this.nodeManager != null) this.nodeManager.stop();
+        });
+        freeQuietly("traversal", () -> {
+            if (this.traversal != null) this.traversal.free();
+        });
+        freeQuietly("nodeCleaner", () -> {
+            if (this.nodeCleaner != null) this.nodeCleaner.free();
+        });
+        freeQuietly("geometryData", () -> {
+            if (this.geometryData != null) this.geometryData.free();
+        });
+        freeQuietly("boundRenderer", () -> {
+            if (this.boundRenderer != null) this.boundRenderer.free();
+        });
+        freeQuietly("boundStore", () -> {
+            if (this.boundStore != null) this.boundStore.free();
+        });
+        freeQuietly("viewportSelector", () -> {
+            if (this.viewportSelector != null) this.viewportSelector.free();
+        });
+        freeQuietly("pipeline", () -> {
+            if (this.pipeline != null) {
+                this.pipeline.free();// also frees its sectionRenderer
+            } else if (this.sectionRenderer != null) {
+                this.sectionRenderer.free();
+            }
+        });
+    }
+
+    private static void freeQuietly(String what, Runnable action) {
+        try {
+            action.run();
+        } catch (Throwable t) {
+            Logger.error("Rollback of " + what + " failed", t);
         }
     }
 
@@ -189,12 +278,102 @@ public class VoxelRenderSystem {
         return viewport;
     }
 
+    /**
+     * Called right after {@code Renderer.beginFrame()} returns, i.e. after the
+     * previous frame's fence wait and swapchain acquire. Together with
+     * {@link #renderOpaque} this splits a frame into three buckets:
+     * {@code pre} (Beryl shadow + vanilla terrain before the LOD pass),
+     * {@code voxel} (our pass) and {@code post} (bloom/final/submit + present +
+     * the next frame's fence wait).
+     */
+    public void onFrameBeginTimestamp() {
+        long now = System.nanoTime();
+        if (this.lastOpaqueEndNanos != 0L) {
+            this.lastPostVoxelNanos = now - this.lastOpaqueEndNanos;
+        }
+        this.frameBeginNanos = now;
+        this.firstSectionLayerNanos = 0L;
+    }
+
+    /**
+     * Called from VulkanMod's {@code renderSectionLayer} HEAD for the first real
+     * terrain layer of the frame (Beryl's shadow stage is filtered out earlier).
+     * That boundary splits {@code pre} into Beryl's shadow pass and vanilla
+     * terrain recording.
+     */
+    public void onFirstSectionLayer() {
+        if (this.firstSectionLayerNanos == 0L) {
+            this.firstSectionLayerNanos = System.nanoTime();
+        }
+    }
+
+    private void recordFrameTime(long frameNanos) {
+        this.frameHistoryNanos[this.frameHistoryIndex++] = frameNanos;
+        if (this.frameHistoryIndex < FRAME_HISTORY) {
+            return;
+        }
+        this.frameHistoryIndex = 0;
+        long[] sorted = this.frameHistoryNanos.clone();
+        java.util.Arrays.sort(sorted);
+        long sum = 0L;
+        for (long v : sorted) {
+            sum += v;
+        }
+        double avg = (double) sum / FRAME_HISTORY;
+        Logger.info(String.format(java.util.Locale.ROOT,
+                "[FramePerf] avg=%.2fms p50=%.2f p95=%.2f p99=%.2f max=%.2f (~%.0f fps avg)",
+                avg / 1e6,
+                sorted[FRAME_HISTORY / 2] / 1e6,
+                sorted[(int) (FRAME_HISTORY * 0.95)] / 1e6,
+                sorted[(int) (FRAME_HISTORY * 0.99)] / 1e6,
+                sorted[FRAME_HISTORY - 1] / 1e6,
+                1e9 / avg));
+    }
+
     public void renderOpaque(Viewport<?> viewport) {
-        if (viewport == null || viewport.width <= 0 || viewport.height <= 0 || BerylUtil.berylShadowActive()) {
+        if (viewport == null || viewport.width <= 0 || viewport.height <= 0 || BerylUtil.berylShadowActive()
+                || !VoxelConfig.CONFIG.isRenderingEnabled()) {
             return;
         }
 
         TimingStatistics.resetSamplers();
+
+        long now = System.nanoTime();
+        this.lastPreVoxelNanos = this.frameBeginNanos != 0L ? now - this.frameBeginNanos : 0L;
+        this.lastShadowNanos = (this.firstSectionLayerNanos != 0L && this.frameBeginNanos != 0L)
+                ? this.firstSectionLayerNanos - this.frameBeginNanos : -1L;
+        this.lastVanillaNanos = this.firstSectionLayerNanos != 0L
+                ? now - this.firstSectionLayerNanos : -1L;
+        boolean active = !Minecraft.getInstance().isPaused() && Minecraft.getInstance().isWindowActive();
+        if (!active) {
+            // Paused/unfocused frames are capped at 10 FPS by Minecraft and are
+            // not gameplay hitches; drop the interval so resuming the game does
+            // not log the whole pause as a spike.
+            this.lastOpaqueStartNanos = 0L;
+        } else {
+            if (this.lastOpaqueStartNanos != 0L) {
+                long frameNanos = now - this.lastOpaqueStartNanos;
+                this.recordFrameTime(frameNanos);
+                if (frameNanos > 20_000_000L && now - this.lastSpikeLogNanos > 1_000_000_000L) {
+                    this.lastSpikeLogNanos = now;
+                    Logger.warn(String.format(java.util.Locale.ROOT,
+                            "[FrameSpike] frame=%.2fms pre=%.2f shadow=%.2f vanilla=%.2f voxel=%.2f post=%.2f UC/GC=%d/%d genTasks=%d nodeWork=%s beryl=%s %s",
+                            frameNanos / 1_000_000.0,
+                            this.lastPreVoxelNanos / 1_000_000.0,
+                            this.lastShadowNanos / 1_000_000.0,
+                            this.lastVanillaNanos / 1_000_000.0,
+                            this.lastOpaqueDurationNanos / 1_000_000.0,
+                            this.lastPostVoxelNanos / 1_000_000.0,
+                            this.nodeManager.getUsedGeometryCapacity() / (1 << 20),
+                            this.nodeManager.getGeometryCapacity() / (1 << 20),
+                            this.renderGen.getTaskCount(),
+                            this.nodeManager.hasWork(),
+                            BerylUtil.berylShaderEnabled(),
+                            GPUTiming.INSTANCE.getDebug()));
+                }
+            }
+            this.lastOpaqueStartNanos = now;
+        }
 
         TimingStatistics.all.start();
         GPUTiming.INSTANCE.marker("opaque");
@@ -227,6 +406,30 @@ public class VoxelRenderSystem {
         Renderer.setViewport(0, 0, srcWidth, srcHeight);
         VkState.setDepthTest(true);
         BerylUtil.clearBerylSamplers();
+
+        long opaqueEnd = System.nanoTime();
+        this.lastOpaqueEndNanos = opaqueEnd;
+        if (this.lastOpaqueStartNanos != 0L) {
+            long opaqueDuration = opaqueEnd - this.lastOpaqueStartNanos;
+            this.lastOpaqueDurationNanos = opaqueDuration;
+            if (opaqueDuration > 20_000_000L && opaqueEnd - this.lastSpikeLogNanos > 1_000_000_000L) {
+                this.lastSpikeLogNanos = opaqueEnd;
+                Logger.warn(String.format(java.util.Locale.ROOT,
+                        "[VoxelSpike] voxel=%.2fms setup=%s traverse=%s opaque=%s blit=%s dynamic=%s main=%s all=%s UC/GC=%d/%d genTasks=%d nodeWork=%s",
+                        opaqueDuration / 1_000_000.0,
+                        TimingStatistics.E.pVal(),
+                        TimingStatistics.F.pVal(),
+                        TimingStatistics.G.pVal(),
+                        TimingStatistics.I.pVal(),
+                        TimingStatistics.dynamic.pVal(),
+                        TimingStatistics.main.pVal(),
+                        TimingStatistics.all.pVal(),
+                        this.nodeManager.getUsedGeometryCapacity() / (1 << 20),
+                        this.nodeManager.getGeometryCapacity() / (1 << 20),
+                        this.renderGen.getTaskCount(),
+                        this.nodeManager.hasWork()));
+            }
+        }
     }
 
     /**
@@ -264,7 +467,8 @@ public class VoxelRenderSystem {
     }
 
     public void renderTranslucent(Viewport<?> viewport) {
-        if (viewport == null || viewport.width <= 0 || viewport.height <= 0 || BerylUtil.berylShadowActive()) {
+        if (viewport == null || viewport.width <= 0 || viewport.height <= 0 || BerylUtil.berylShadowActive()
+                || !VoxelConfig.CONFIG.isRenderingEnabled()) {
             return;
         }
 
@@ -385,6 +589,7 @@ public class VoxelRenderSystem {
                 + " RS: " + VoxelConfig.CONFIG.lodRenderScale
                 + " TC: " + VoxelConfig.CONFIG.enableTemporalCatchup);
         debug.add("Buf/Tex [#/Mb]: [" + VkBuffer.getCount() + "/" + (VkBuffer.getTotalSize()/1_000_000) + "],[" + VkTexture.getCount() + "/" + (VkTexture.getEstimatedTotalSize()/1_000_000)+"]");
+        debug.add("Quad overflow (dropped): " + RenderDataFactory.getQuadOverflowTotal());
         {
             this.modelService.addDebugData(debug);
             this.renderGen.addDebugData(debug);
@@ -437,10 +642,13 @@ public class VoxelRenderSystem {
             this.worldIn.getMapper().setBiomeCallback(null);
             this.worldIn.getMapper().setStateCallback(null);
 
+            // Stop every producer before draining the node manager: a mesh
+            // worker that is still finishing can otherwise pass the running
+            // check while stop() is draining and enqueue a section afterwards.
+            this.renderGen.shutdown();
+            this.modelService.shutdown();
             this.nodeManager.stop();
 
-            this.modelService.shutdown();
-            this.renderGen.shutdown();
             this.traversal.free();
             this.nodeCleaner.free();
 
