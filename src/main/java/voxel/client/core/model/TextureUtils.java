@@ -49,6 +49,57 @@ public class TextureUtils {
     public static final int WRITE_CHECK_DEPTH = 2;
     public static final int WRITE_CHECK_ALPHA = 3;
 
+    /**
+     * Fills the transparent holes of a leaf model's six views with the nearest
+     * opaque leaf texel (colour and depth) and makes them opaque.
+     *
+     * <p>CullLeaves and 3D leaf packs expect the renderer to see the inner
+     * offset faces through these holes. The LOD baker maps one outer face onto
+     * a cube, so a hole would expose the sky instead. At LOD distance a solid
+     * leaf texel is a much smaller error than a hole through the canopy.</p>
+     */
+    public static void fillLeafHoles(ColourDepthTextureData[] textures) {
+        final int width = textures[0].width();
+        final int height = textures[0].height();
+        final int pixels = width * height;
+        for (ColourDepthTextureData texture : textures) {
+            if (texture == null) {
+                continue;
+            }
+            int[] colour = texture.colour();
+            int[] depth = texture.depth();
+            int[] solidIndices = new int[pixels];
+            int solidCount = 0;
+            for (int i = 0; i < pixels; i++) {
+                if ((colour[i] >>> 24) > 1) {
+                    solidIndices[solidCount++] = i;
+                }
+            }
+            if (solidCount == 0) {
+                continue;
+            }
+            for (int i = 0; i < pixels; i++) {
+                if ((colour[i] >>> 24) > 1) {
+                    continue;
+                }
+                int x = i % width;
+                int y = i / width;
+                int best = Integer.MAX_VALUE;
+                int bestIndex = solidIndices[0];
+                for (int s = 0; s < solidCount; s++) {
+                    int j = solidIndices[s];
+                    int d = Math.abs((j % width) - x) + Math.abs((j / width) - y);
+                    if (d < best) {
+                        best = d;
+                        bestIndex = j;
+                    }
+                }
+                colour[i] = (colour[bestIndex] & 0x00FFFFFF) | 0xFF000000;
+                depth[i] = depth[bestIndex];
+            }
+        }
+    }
+
     private static boolean wasPixelWritten(ColourDepthTextureData data, int mode, int index) {
         if (mode == WRITE_CHECK_STENCIL) {
             return (data.depth()[index] & 0xFF) != 0;

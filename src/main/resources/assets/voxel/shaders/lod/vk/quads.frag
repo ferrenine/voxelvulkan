@@ -700,14 +700,19 @@ void main() {
     #endif
 
     //Also, small quad is really fking over the mipping level somehow
+    // Cutout alpha comes from the already mip-filtered colour sample.
+    // MipGen solid-fills transparent texels with the nearest opaque colour, so
+    // a mip alpha above the threshold contributes leaf/plant colour instead of
+    // the white/black background. Sampling mip 0 here made holes grow into
+    // large sky speckles on distant leaves, grass, flowers and kelp.
     #ifndef TRANSLUCENT
+    float cutoutAlpha = colour.a;
     colour.a = 1.0f;
-    if (useDiscard() && (textureLod(blockModelAtlas, texPos, 0).a <= 0.1f)) {
+    if (useDiscard() && cutoutAlpha <= 0.1f) {
     #else
     if (textureLod(blockModelAtlas, texPos, 0).a == 0.0f) {
     #endif
-        //AUDIT-FIXME: samples the exact pixel (no lod) for discarding — bad for
-        // divergence, but it stops mipmapping from producing wrong alpha.
+        // Translucent still uses mip 0 for the zero-alpha case.
         #ifndef DEBUG_RENDER
         discard;
         return;

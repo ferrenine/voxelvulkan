@@ -8,7 +8,9 @@ import voxel.client.core.vk.VkState;
 import voxel.client.vk.VkVoxel;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.ItemBlockRenderTypes;
+import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.client.renderer.block.model.BlockModelPart;
+import net.minecraft.client.renderer.block.model.BlockStateModel;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -76,6 +78,14 @@ public class ModelTextureBakery {
             return LambdaBetterGrassCompat.bakeConnected(model, state, this.vc, meta);
         }
 
+        // CullLeaves' smartleaves model (and several 3D leaf packs) adds inner
+        // offset quads around the normal cube. Baking those into the 6-view
+        // atlas leaves holes and rotated fragments when the LOD shader maps
+        // them back onto a cube surface. Keep only the six full outer faces.
+        if (bakeLeafOuterFaces(state, layer, model)) {
+            return false;
+        }
+
         var randomSource = new SingleThreadedRandomSource(42L);
         boolean isFence = state.getBlock() instanceof net.minecraft.world.level.block.FenceBlock;
         List<BlockModelPart> parts = model.collectParts(randomSource);
@@ -92,6 +102,92 @@ public class ModelTextureBakery {
             }
         }
         return false;
+    }
+
+    /**
+     * Leaves are the one common model that resource packs replace with a
+     * double-sided, offset cube (CullLeaves) or a multi-plane bush. The LOD
+     * atlas represents the block as one six-view cube, so choose the six
+     * original unit-cube faces and ignore the inner offset copies.
+     *
+     * @return true when all six outer faces were found and emitted
+     */
+    private boolean bakeLeafOuterFaces(BlockState state, ChunkSectionLayer layer, BlockStateModel model) {
+        if (!(state.getBlock() instanceof LeavesBlock)) {
+            return false;
+        }
+
+        var random = new SingleThreadedRandomSource(42L);
+        List<BlockModelPart> parts = model.collectParts(random);
+        BakedQuad[] faces = new BakedQuad[6];
+        int found = 0;
+        for (BlockModelPart part : parts) {
+            for (Direction direction : Direction.values()) {
+                int index = direction.ordinal();
+                if (faces[index] != null) {
+                    continue;
+                }
+                for (BakedQuad quad : part.getQuads(direction)) {
+                    if (isFullCubeFace(quad, direction)) {
+                        faces[index] = quad;
+                        found++;
+                        break;
+                    }
+                }
+            }
+        }
+        if (found != 6) {
+            return false;
+        }
+
+        int meta = getMetaFromLayer(layer);
+        for (Direction direction : Direction.values()) {
+            BakedQuad quad = faces[direction.ordinal()];
+            this.vc.quad(quad, meta | (quad.isTinted() ? 4 : 0));
+        }
+        return true;
+    }
+
+    /** True when all four vertices sit on the block boundary and span the whole face. */
+    private static boolean isFullCubeFace(BakedQuad quad, Direction direction) {
+        float plane = direction.getAxisDirection() == Direction.AxisDirection.POSITIVE ? 1.0f : 0.0f;
+        float minA = 1.0f;
+        float maxA = 0.0f;
+        float minB = 1.0f;
+        float maxB = 0.0f;
+        for (int i = 0; i < 4; i++) {
+            var p = quad.position(i);
+            float normal;
+            float a;
+            float b;
+            switch (direction.getAxis()) {
+                case X -> {
+                    normal = p.x();
+                    a = p.y();
+                    b = p.z();
+                }
+                case Y -> {
+                    normal = p.y();
+                    a = p.x();
+                    b = p.z();
+                }
+                case Z -> {
+                    normal = p.z();
+                    a = p.x();
+                    b = p.y();
+                }
+                default -> throw new IllegalStateException();
+            }
+            if (Math.abs(normal - plane) > 0.001f) {
+                return false;
+            }
+            minA = Math.min(minA, a);
+            maxA = Math.max(maxA, a);
+            minB = Math.min(minB, b);
+            maxB = Math.max(maxB, b);
+        }
+        return minA <= 0.001f && maxA >= 0.999f
+                && minB <= 0.001f && maxB >= 0.999f;
     }
 
     private void bakeFluidState(BlockState state, ChunkSectionLayer layer, int face) {

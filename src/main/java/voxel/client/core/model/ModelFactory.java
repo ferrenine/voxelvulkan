@@ -854,6 +854,16 @@ public class ModelFactory {
         boolean isRodOrChain = blockState.getBlock() instanceof net.minecraft.world.level.block.RodBlock
                 || blockState.getBlock() instanceof net.minecraft.world.level.block.ChainBlock;
         boolean isLeaves = blockState.getBlock() instanceof LeavesBlock;
+        if (isLeaves) {
+            // Cutout leaves rely on seeing the inside of the opposite face
+            // through their alpha holes (CullLeaves does this explicitly with
+            // inner offset faces). A backface-culled LOD cube turns every hole
+            // into sky, so far canopies dissolve into floating fragments.
+            // Fill the leaf holes in the baked view as well: the LOD cannot
+            // reproduce CullLeaves' 0.01-offset inner cube.
+            TextureUtils.fillLeafHoles(textureData);
+            needsDoubleSidedQuads = true;
+        }
         boolean cullsSame = isStair || isRodOrChain;
 
         if (!cullsSame) {

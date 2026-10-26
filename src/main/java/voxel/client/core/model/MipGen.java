@@ -113,9 +113,11 @@ public class MipGen {
             solidMsk |= (anyTransparent ? 1 : 0) << i;
         }
 
-        if (!darkened) {
-            solidify(addr, solidMsk);
-        }
+        // Always solid-fill transparent texels. The shader's cutout discard
+        // uses mip 0 alpha, so the RGB of a hole only contributes to the mip
+        // colour; leaving it black/white is what produced the dark speckle on
+        // distant leaves. Keeping mip 0 alpha at zero still discards the hole.
+        solidify(addr, solidMsk);
 
         //Downsample level by level; each level reads the previous.
         long sAddr = addr;
