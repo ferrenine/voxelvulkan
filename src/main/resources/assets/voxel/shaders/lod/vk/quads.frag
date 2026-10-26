@@ -660,16 +660,27 @@ void main() {
         return;
     }
 
-    // Cut the far LOD where the near chunks' bounding depth is closer. This is
-    // the LOD boundary buffer that the GL LING-Horizons shader used; without it
-    // the coarse far surface can overwrite the real near chunks and the seam
-    // follows the render-distance line instead of the loaded chunk silhouette.
-    // (The shadow caster pass skips rendered vanilla sections per quad instead.)
+    // Cut the *far* LOD where the near chunks' bounding depth is closer. Do NOT
+    // apply this to LOD0: its own near-field mesh sits at the same surface as
+    // the vanilla chunks and is already masked precisely by the stencil test
+    // (stencil 0 only where actual vanilla geometry exists). The AABB is 16
+    // blocks tall while the vanilla mesh usually fills only its lower part, so
+    // its far face sits up to 16 blocks behind the real surface; cutting LOD0
+    // against it discarded visible LOD0 terrain along the vanilla seam and
+    // exposed the caves/air behind the near chunks.
     #ifndef SHADOW_PASS
+    #ifndef TRANSLUCENT
+    if (((interData.w >> 3) & 7u) != 0u
+            && gl_FragCoord.z < texelFetch(depthTex, ivec2(gl_FragCoord.xy), 0).r) {
+        discard;
+        return;
+    }
+    #else
     if (gl_FragCoord.z < texelFetch(depthTex, ivec2(gl_FragCoord.xy), 0).r) {
         discard;
         return;
     }
+    #endif
     #endif
 
     //Also, small quad is really fking over the mipping level somehow
