@@ -1190,6 +1190,23 @@ public class ModelFactory {
         if (this.lbgVariantLUT[baseModelId] != -1) {
             return;
         }
+
+        // The LBG sibling must not replace a fully visible grass side with an
+        // empty/transparent atlas view. This happens when LBG's generated
+        // connect sprite is absent or cannot be resolved in the pack's atlas;
+        // the result is the "missing block side" seen on terraced grass. Drop
+        // the sibling and keep the vanilla base model instead.
+        ChunkSectionLayer layer = ItemBlockRenderTypes.getChunkRenderType(result.blockState);
+        int checkMode = layer == ChunkSectionLayer.SOLID ? TextureUtils.WRITE_CHECK_STENCIL : TextureUtils.WRITE_CHECK_ALPHA;
+        for (int face = 2; face < 6; face++) {
+            if (textureData[face] == null
+                    || TextureUtils.getWrittenPixelCount(textureData[face], checkMode) == 0) {
+                Logger.warn("LambdaBetterGrass sibling for " + result.blockState
+                        + " has an empty side view; keeping the vanilla model");
+                return;
+            }
+        }
+
         int variantModelId = this.modelTexture2id.size();
         if (variantModelId >= MAX_MODEL_COUNT) {
             this.reportModelOverflow("LambdaBetterGrass sibling of model " + baseModelId);
@@ -1210,8 +1227,6 @@ public class ModelFactory {
                 upload.model.address,
                 MODEL_SIZE);
 
-        ChunkSectionLayer layer = ItemBlockRenderTypes.getChunkRenderType(result.blockState);
-        int checkMode = layer == ChunkSectionLayer.SOLID ? TextureUtils.WRITE_CHECK_STENCIL : TextureUtils.WRITE_CHECK_ALPHA;
         for (int face = 2; face < 6; face++) {
             long ptr = upload.model.address + 4L * face;
             int faceData = MemoryUtil.memGetInt(ptr);
