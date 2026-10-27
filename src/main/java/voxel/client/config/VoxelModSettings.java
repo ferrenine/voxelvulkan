@@ -15,6 +15,7 @@ import net.vulkanmod.config.option.RangeOption;
 import net.vulkanmod.config.option.SwitchOption;
 import voxel.client.core.IGetVoxelRenderSystem;
 import voxel.client.core.VoxelRenderSystem;
+import voxel.client.core.util.PerformanceMetrics;
 import voxel.client.VoxelCommands;
 import voxel.common.Logger;
 import voxel.commonimpl.VoxelCommon;
@@ -134,6 +135,7 @@ public final class VoxelModSettings {
                 block("voxel.block.threads", workerThreads),
                 block("voxel.block.diagnostics",
                         toggle("voxel.option.f3_diagnostics", v -> cfg.renderStatistics = v, () -> cfg.renderStatistics),
+                        toggle("voxel.option.performance_metrics", v -> cfg.performanceMetrics = v, () -> cfg.performanceMetrics),
                         toggle("voxel.option.gpu_timing", v -> cfg.gpuTiming = v, () -> cfg.gpuTiming))
         }));
 
@@ -184,6 +186,7 @@ public final class VoxelModSettings {
     private static void apply() {
         VoxelConfig cfg = VoxelConfig.CONFIG;
         cfg.save();
+        PerformanceMetrics.setEnabled(cfg.performanceMetrics);
 
         boolean rebuild = needsRebuild();
         takeSnapshot();

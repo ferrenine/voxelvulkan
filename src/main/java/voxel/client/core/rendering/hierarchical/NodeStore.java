@@ -1,6 +1,7 @@
 package voxel.client.core.rendering.hierarchical;
 
 import voxel.common.util.HierarchicalBitSet;
+import voxel.common.util.PerformanceCounters;
 import org.lwjgl.system.MemoryUtil;
 
 public final class NodeStore {
@@ -69,6 +70,7 @@ public final class NodeStore {
             long[] newStore = new long[newSize * LONGS_PER_NODE];
             System.arraycopy(this.localNodeData, 0, newStore, 0, this.localNodeData.length);
             this.localNodeData = newStore;
+            PerformanceCounters.recordHeapGrow((long) newSize * LONGS_PER_NODE * Long.BYTES);
         }
     }
 

@@ -46,6 +46,29 @@ The build product is located at `build/libs/voxel-*.jar`. The prebuilt
 `libs/` jars are development-only dependencies and are not shipped inside the
 mod jar.
 
+## Performance Metrics
+
+The renderer can record a frame-time distribution and the counters needed to
+diagnose hitches:
+
+```text
+/vx perf start
+/vx perf stop
+/vx perf reset
+/vx perf dump
+```
+
+`dump` writes `voxel-perf/<timestamp>.json` and `.csv` under the game
+directory. The JSON includes P50/P95/P99/P99.9 frame times, 1% / 0.1% lows,
+spike reasons (`DEVICE_WAIT`, `UPLOAD_OVERFLOW`, `MESH_BURST`,
+`PIPELINE_CREATE`, `DISK_READ`, `DISK_WRITE`, `HEAP_GROW`, `GC_PAUSE`),
+barrier/transfer counters, mesh and geometry queues, native/VRAM usage and GC
+time. The CSV contains one row per frame with its spike mask.
+
+The same session can be enabled from the VulkanMod settings page
+(`Diagnostics → Performance Metrics`). Recording is off by default; the hot
+path is one ring-buffer write per frame.
+
 ## Storage and Cache
 
 LOD data is stored per world:

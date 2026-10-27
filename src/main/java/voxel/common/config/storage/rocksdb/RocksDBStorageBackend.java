@@ -13,10 +13,15 @@ import org.rocksdb.*;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.LongConsumer;
 
 public class RocksDBStorageBackend extends StorageBackend {
+    private static final List<RocksDB> OPEN_DBS = new CopyOnWriteArrayList<>();
+
     private final RocksDB db;
     private final ColumnFamilyHandle worldSections;
     private final ColumnFamilyHandle idMappings;
@@ -71,6 +76,7 @@ public class RocksDBStorageBackend extends StorageBackend {
             this.db = RocksDB.open(options,
                     path, cfDescriptors,
                     handles);
+            OPEN_DBS.add(this.db);
 
             this.sectionReadOps = new ReadOptions();
             this.sectionWriteOps = new WriteOptions();
@@ -191,7 +197,39 @@ public class RocksDBStorageBackend extends StorageBackend {
     @Override
     public void close() {
         this.flush();
+        OPEN_DBS.remove(this.db);
         this.closeList.forEach(AbstractImmutableNativeReference::close);
+    }
+
+    /**
+     * Best-effort runtime statistics for /vx perf dump. Returns an empty map
+     * when the default backend is not RocksDB or no database is open.
+     */
+    public static Map<String, String> collectStats() {
+        Map<String, String> out = new LinkedHashMap<>();
+        int index = 0;
+        for (RocksDB db : OPEN_DBS) {
+            String prefix = "rocksdb." + (index++) + ".";
+            addProperty(out, prefix + "num-running-compactions", db, "rocksdb.num-running-compactions");
+            addProperty(out, prefix + "num-running-flushes", db, "rocksdb.num-running-flushes");
+            addProperty(out, prefix + "estimate-pending-compaction-bytes", db, "rocksdb.estimate-pending-compaction-bytes");
+            addProperty(out, prefix + "block-cache-usage", db, "rocksdb.block-cache-usage");
+            addProperty(out, prefix + "block-cache-pinned-usage", db, "rocksdb.block-cache-pinned-usage");
+            addProperty(out, prefix + "size-all-mem-tables", db, "rocksdb.size-all-mem-tables");
+            addProperty(out, prefix + "stats", db, "rocksdb.stats");
+        }
+        return out;
+    }
+
+    private static void addProperty(Map<String, String> out, String name, RocksDB db, String property) {
+        try {
+            String value = db.getProperty(property);
+            if (value != null) {
+                out.put(name, value);
+            }
+        } catch (Exception ignored) {
+            // A database that is closing or a build without the property.
+        }
     }
 
     private static byte[] intToBytes(int i) {

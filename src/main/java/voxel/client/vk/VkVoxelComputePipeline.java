@@ -1,6 +1,7 @@
 package voxel.client.vk;
 
 import voxel.common.Logger;
+import voxel.common.util.PerformanceCounters;
 import voxel.common.util.TrackedObject;
 import net.vulkanmod.vulkan.shader.SPIRVUtils;
 import org.lwjgl.system.MemoryStack;
@@ -380,7 +381,9 @@ public class VkVoxelComputePipeline extends TrackedObject implements VkVoxelPipe
                 .basePipelineIndex(-1);
 
         LongBuffer pPipeline = stack.mallocLong(1);
+        long createStart = System.nanoTime();
         int res = vkCreateComputePipelines(VkVoxel.device(), VK_NULL_HANDLE, info, null, pPipeline);
+        PerformanceCounters.recordPipelineCreate(System.nanoTime() - createStart);
         if (res != VK_SUCCESS) {
             throw new IllegalStateException("vkCreateComputePipelines failed (" + res + ") for '" + this.name + "'");
         }

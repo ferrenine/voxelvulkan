@@ -20,6 +20,7 @@ import voxel.client.core.rendering.util.UploadStream;
 import voxel.common.Logger;
 import voxel.common.util.AllocationArena;
 import voxel.common.util.MemoryBuffer;
+import voxel.common.util.PerformanceCounters;
 import voxel.common.util.UnsafeUtil;
 import voxel.common.world.WorldEngine;
 import voxel.common.world.WorldSection;
@@ -113,6 +114,7 @@ public class AsyncNodeManager {
         this.router = new SectionUpdateRouter();
         this.router.setCallbacks(pos->{//On initial render gen, try get from geometry cache
             var cachedGeometry = this.geometryCache.remove(pos);
+            PerformanceCounters.recordGeometryCache(cachedGeometry != null);
             if (cachedGeometry != null) {//Use the cached geometry
                 // The generation check below still applies: a dirty event that
                 // raced the cache lookup must not resurrect the old mesh.
@@ -263,22 +265,31 @@ public class AsyncNodeManager {
         // one; a single oversized job is still processed to avoid a stall.
         long freeBytes = this.geometryCapacity - this.geometryManager.getGeometryUsedBytes();
         long uploadedBytes = 0;
+        int meshJobs = 0;
+        boolean budgetHit = false;
         for (int limit = 0; limit < 300 && freeBytes > 50_000_000L; limit++) {
             var next = this.geometryUpdateQueue.peek();
             if (next == null)
                 break;
             long nextBytes = (next.geometryBuffer != null ? next.geometryBuffer.size : 0)
                     + (next.lightBuffer != null ? next.lightBuffer.size : 0);
-            if (uploadedBytes > 0 && uploadedBytes + nextBytes > (1L << 20))
+            if (uploadedBytes > 0 && uploadedBytes + nextBytes > (1L << 20)) {
+                budgetHit = true;
                 break;
+            }
             var job = this.geometryUpdateQueue.poll();
             if (job == null)
                 break;
             workDone++;
+            meshJobs++;
             uploadedBytes += nextBytes;
             this.manager.processGeometryResult(job);
             freeBytes = this.geometryCapacity - this.geometryManager.getGeometryUsedBytes();
         }
+        budgetHit |= !this.geometryUpdateQueue.isEmpty();
+        PerformanceCounters.recordMeshSync(meshJobs, uploadedBytes, budgetHit);
+        PerformanceCounters.setMeshQueue(this.renderService.getTaskCount());
+        PerformanceCounters.setGeometryUpdateQueue(this.geometryUpdateQueue.size());
 
         while (true) {//Process all request batches
             var job = this.requestBatchQueue.poll();
@@ -652,6 +663,14 @@ public class AsyncNodeManager {
         return this.geometryCapacity;
     }
 
+    private static long builtSectionBytes(BuiltSection section) {
+        long bytes = section.geometryBuffer != null ? section.geometryBuffer.size : 0L;
+        if (section.lightBuffer != null) {
+            bytes += section.lightBuffer.size;
+        }
+        return bytes;
+    }
+
 
     //==================================================================================================================
     //Incoming events
@@ -718,7 +737,9 @@ public class AsyncNodeManager {
             //CPU-side copy so future requests for this position skip remeshing;
             // invalidated via worldEvent() when the section (or a face neighbour)
             // changes, and bounded by LRU size.
-            this.geometryCache.put(geometry.clone());
+            BuiltSection cachedCopy = geometry.clone();
+            PerformanceCounters.recordGeometryClone(builtSectionBytes(cachedCopy));
+            this.geometryCache.put(cachedCopy);
             this.geometryUpdateQueue.add(geometry);
             this.addWork();
         }

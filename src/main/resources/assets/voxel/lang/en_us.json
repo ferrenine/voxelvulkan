@@ -23,6 +23,9 @@
   "voxel.option.f3_diagnostics": "F3 Diagnostics",
   "voxel.option.f3_diagnostics.tooltip": "Shows a compact LOD summary on the F3 screen: active pipeline, geometry/VRAM usage, work queues, and frame timings. Detailed traversal counters remain in the periodic log dump. It costs a per-frame GPU readback, so enable it for debugging only. Apply reloads the renderer automatically.",
 
+  "voxel.option.performance_metrics": "Performance Metrics",
+  "voxel.option.performance_metrics.tooltip": "Records frame-time percentiles, barrier/wait counters, upload/download bytes and mesh/storage stalls. Use /vx perf start, /vx perf stop and /vx perf dump to capture and export a scenario. Off by default.",
+
   "voxel.option.rendering": "LOD Rendering",
   "voxel.option.rendering.tooltip": "Enables GPU-driven drawing of distant voxel terrain. Disabling stops rasterization to save GPU power while background data sampling and octree caching remain active. Takes effect immediately on Apply.",
 

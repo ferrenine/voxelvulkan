@@ -1,6 +1,7 @@
 package voxel.client.vk;
 
 import voxel.common.Logger;
+import voxel.common.util.PerformanceCounters;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.Vulkan;
 import net.vulkanmod.vulkan.device.DeviceManager;
@@ -230,23 +231,28 @@ public final class VkVoxel {
 
     /** Waits for all submitted GPU work to complete (maps the old {@code glFinish}). */
     public static void waitIdle() {
+        long startNanos = System.nanoTime();
         try {
-            VkDevice device = device();
-            if (device != null) {
-                int res = vkDeviceWaitIdle(device);
-                if (res != VK_SUCCESS) {
-                    Logger.warn("vkDeviceWaitIdle failed: " + res);
-                    return;
+            try {
+                VkDevice device = device();
+                if (device != null) {
+                    int res = vkDeviceWaitIdle(device);
+                    if (res != VK_SUCCESS) {
+                        Logger.warn("vkDeviceWaitIdle failed: " + res);
+                        return;
+                    }
                 }
+            } catch (Throwable t) {
+                // Do not claim any completion when the wait itself failed.
+                Logger.warn("vkDeviceWaitIdle failed: " + t);
+                return;
             }
-        } catch (Throwable t) {
-            // Do not claim any completion when the wait itself failed.
-            Logger.warn("vkDeviceWaitIdle failed: " + t);
-            return;
-        }
-        long submitted = submittedEpoch;
-        if (submitted > completedEpoch) {
-            completedEpoch = submitted;
+            long submitted = submittedEpoch;
+            if (submitted > completedEpoch) {
+                completedEpoch = submitted;
+            }
+        } finally {
+            PerformanceCounters.recordWaitIdle(System.nanoTime() - startNanos);
         }
     }
 
@@ -256,6 +262,7 @@ public final class VkVoxel {
 
     /** Global memory barrier between two pipeline stages. */
     public static void memoryBarrier(VkCommandBuffer cb, int srcStage, int dstStage, int srcAccess, int dstAccess) {
+        PerformanceCounters.recordMemoryBarrier();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack);
             barrier.sType(VK_STRUCTURE_TYPE_MEMORY_BARRIER)
@@ -311,6 +318,7 @@ public final class VkVoxel {
      * synchronisation hid a lot, so funnel those calls through here.
      */
     public static void fullBarrier(VkCommandBuffer cb) {
+        PerformanceCounters.recordFullBarrier();
         memoryBarrier(cb,
                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
@@ -338,6 +346,7 @@ public final class VkVoxel {
     public static void computeBarrier() {
         VkCommandBuffer cb = commandBufferOrNull();
         if (cb != null) {
+            PerformanceCounters.recordComputeBarrier();
             ensureOutsideRenderPass();
             memoryBarrier(cb,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT

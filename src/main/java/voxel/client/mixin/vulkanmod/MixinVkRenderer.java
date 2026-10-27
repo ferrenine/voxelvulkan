@@ -3,6 +3,7 @@ package voxel.client.mixin.vulkanmod;
 import voxel.client.VoxelClient;
 import voxel.client.core.IGetVoxelRenderSystem;
 import voxel.client.core.util.BerylUtil;
+import voxel.client.core.util.PerformanceMetrics;
 import voxel.client.vk.VkVoxel;
 import net.vulkanmod.vulkan.Renderer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -29,6 +30,7 @@ public class MixinVkRenderer {
     @Inject(method = "beginFrame", at = @At("HEAD"))
     private void voxel$onFrameBegin(CallbackInfo ci) {
         VkVoxel.onFrameBegin();
+        PerformanceMetrics.onFrameBegin();
     }
 
     @Inject(method = "beginFrame", at = @At("RETURN"))
@@ -47,6 +49,7 @@ public class MixinVkRenderer {
     @Inject(method = "submitFrame", at = @At("RETURN"))
     private void voxel$onSubmitFrame(CallbackInfo ci) {
         VkVoxel.onFrameSubmitted();
+        PerformanceMetrics.onFrameEnd();
     }
 
     @Inject(method = "flushCmds", at = @At("RETURN"))

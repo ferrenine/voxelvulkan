@@ -26,6 +26,9 @@
   "voxel.option.f3_diagnostics": "F3 诊断信息",
   "voxel.option.f3_diagnostics.tooltip": "在 F3 屏幕显示精简的 LOD 摘要：当前管线、几何/显存占用、工作队列和帧时间；详细遍历计数仍会写入周期日志。会每帧回读 GPU 统计，对帧率有影响，仅调试时开启；Apply 后自动重载渲染器。",
 
+  "voxel.option.performance_metrics": "性能观测",
+  "voxel.option.performance_metrics.tooltip": "记录帧时间分位数、屏障/等待计数、上传下载字节数以及网格/存储停顿。用 /vx perf start、/vx perf stop 和 /vx perf dump 采集并导出一次测试场景。默认关闭。",
+
   "voxel.option.gpu_timing": "GPU 计时",
   "voxel.option.gpu_timing.tooltip": "仅调试用：在每个 LOD pass 前后写入 Vulkan 时间戳，每 15 帧回读一次。Bottom-of-pipe 时间戳可能让 pass 串行，正常游玩请关闭。",
 

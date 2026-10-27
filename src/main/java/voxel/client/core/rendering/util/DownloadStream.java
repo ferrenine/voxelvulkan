@@ -8,6 +8,7 @@ import voxel.client.vk.VkVoxel;
 import voxel.common.Logger;
 import voxel.common.util.AllocationArena;
 import voxel.common.util.MemoryBuffer;
+import voxel.common.util.PerformanceCounters;
 import net.vulkanmod.vulkan.Vulkan;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkBufferCopy;
@@ -72,11 +73,13 @@ public class DownloadStream {
         if (downloadOffset + size > buffer.size()) {
             throw new IllegalArgumentException();
         }
+        PerformanceCounters.recordDownload(size);
 
         long addr;
         if (this.caddr == -1 || !this.allocationArena.expand(this.caddr, (int) size)) {
             this.caddr = this.allocationArena.alloc((int) size);//TODO: replace with allocFromLargest
             if (this.caddr == SIZE_LIMIT) {
+                PerformanceCounters.recordDownloadOverflow();
                 Logger.warn("Download stream full, preemptively committing, this could cause bad things to happen");
                 this.commit();
                 // One real drain is enough: all previously submitted download
@@ -115,6 +118,7 @@ public class DownloadStream {
         if (this.downloadList.isEmpty()) {
             return;
         }
+        PerformanceCounters.recordDownloadCommit(this.downloadList.size());
 
         var cb = VkVoxel.commandBufferOrNull();
         if (cb != null) {

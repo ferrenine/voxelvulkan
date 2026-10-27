@@ -30,9 +30,11 @@ import voxel.client.core.rendering.util.PrintfDebugUtil;
 import voxel.client.core.rendering.util.UploadStream;
 import voxel.client.core.util.GPUTiming;
 import voxel.client.core.util.BerylUtil;
+import voxel.client.core.util.PerformanceMetrics;
 import voxel.client.vk.VkVoxel;
 import voxel.common.Logger;
 import voxel.common.thread.ServiceManager;
+import voxel.common.util.PerformanceCounters;
 import voxel.common.world.WorldEngine;
 import voxel.commonimpl.VoxelCommon;
 import net.minecraft.client.Minecraft;
@@ -112,6 +114,7 @@ public class VoxelRenderSystem {
             //Wire renderStatistics before any shader compiles below —
             // HAS_STATISTICS/STATISTICS_BUFFER_BINDING are baked in as defines.
             RenderStatistics.enabled = VoxelConfig.CONFIG.renderStatistics;
+            PerformanceMetrics.setEnabled(VoxelConfig.CONFIG.performanceMetrics);
 
             long geometryCapacity = getGeometryBufferSize();
             var backendFactory = getRenderBackendFactory();
@@ -293,6 +296,10 @@ public class VoxelRenderSystem {
         }
         this.frameBeginNanos = now;
         this.firstSectionLayerNanos = 0L;
+        PerformanceCounters.setMeshQueue(this.renderGen.getTaskCount());
+        PerformanceCounters.setMeshFailed(RenderGenerationService.MESH_FAILED_COUNTER.get());
+        PerformanceCounters.setGeometryUsage(this.nodeManager.getUsedGeometryCapacity(), this.nodeManager.getGeometryCapacity());
+        PerformanceCounters.setModelQueue(this.modelService.getProcessingCount());
     }
 
     /**
@@ -627,6 +634,7 @@ public class VoxelRenderSystem {
         debug.add("LOD work: RSSQ/TFC " + this.renderGen.getTaskCount()
                 + "/" + RenderGenerationService.MESH_FAILED_COUNTER.get()
                 + " | " + this.modelService.getDebugSummary());
+        PerformanceMetrics.addDebug(debug);
 
         if (VoxelConfig.CONFIG.gpuTiming) {
             debug.add(GPUTiming.INSTANCE.getDebug());

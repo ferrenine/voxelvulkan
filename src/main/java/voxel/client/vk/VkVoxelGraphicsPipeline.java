@@ -4,6 +4,7 @@ import voxel.client.core.vk.VkFramebuffer;
 import voxel.client.core.vk.VkState;
 import voxel.client.core.vk.VkBuffer;
 import voxel.common.Logger;
+import voxel.common.util.PerformanceCounters;
 import voxel.common.util.TrackedObject;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.framebuffer.Framebuffer;
@@ -609,7 +610,9 @@ public class VkVoxelGraphicsPipeline extends TrackedObject implements VkVoxelPip
                     .basePipelineIndex(-1);
 
             LongBuffer pPipeline = stack.mallocLong(1);
+            long createStart = System.nanoTime();
             int res = vkCreateGraphicsPipelines(VkVoxel.device(), VK_NULL_HANDLE, info, null, pPipeline);
+            PerformanceCounters.recordPipelineCreate(System.nanoTime() - createStart);
             if (res != VK_SUCCESS) {
                 throw new IllegalStateException("vkCreateGraphicsPipelines failed (" + res + ") for '" + this.name
                         + "' (color=" + java.util.Arrays.toString(colorFormats) + ", depth=" + depthFormat + ")");

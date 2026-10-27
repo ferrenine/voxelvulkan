@@ -85,6 +85,9 @@ public class VoxelConfig {
 
     // Debug settings
     public boolean renderStatistics = false;
+    // Frame-time/counter recording for /vx perf. Off by default; the command
+    // can start and stop a measurement session at runtime.
+    public boolean performanceMetrics = false;
     // GPU pass timestamps (VkQueryPool). Read back without vkDeviceWaitIdle;
     // costs one query-pool read every 15 frames plus 8 timestamp writes, and
     // the BOTTOM_OF_PIPE timestamps can serialise passes on some GPUs. Turn

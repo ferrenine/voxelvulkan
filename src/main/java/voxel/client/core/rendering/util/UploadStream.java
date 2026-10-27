@@ -8,6 +8,7 @@ import voxel.client.vk.VkVoxel;
 import voxel.common.Logger;
 import voxel.common.util.AllocationArena;
 import voxel.common.util.MemoryBuffer;
+import voxel.common.util.PerformanceCounters;
 import net.vulkanmod.vulkan.device.DeviceManager;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkBufferCopy;
@@ -80,6 +81,7 @@ public class UploadStream {
             throw new IllegalArgumentException("Upload allocation too large: " + size);
         }
         size = (int) alignedSize;
+        PerformanceCounters.recordUpload(size);
 
         long addr;
         if (this.caddr == -1 || !this.allocationArena.expand(this.caddr, (int) size)) {
@@ -89,6 +91,7 @@ public class UploadStream {
                 //Note! we dont commit here, we only try to flush existing memory copies, we dont commit
                 // since commit is an explicit op saying we are done any to push upload everything
                 //We dont commit since we dont want to invalidate existing upload pointers
+                PerformanceCounters.recordUploadOverflow();
                 Logger.error("Upload stream full, preemptively committing, this could cause bad things to happen");
                 // One real drain is enough: waitIdle retires every batch whose
                 // frame was actually submitted, and tick() frees all of them.

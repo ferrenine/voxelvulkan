@@ -5,6 +5,7 @@ import voxel.common.Logger;
 import voxel.common.config.ConfigBuildCtx;
 import voxel.common.config.storage.StorageBackend;
 import voxel.common.config.storage.StorageConfig;
+import voxel.common.util.PerformanceCounters;
 import voxel.common.util.ThreadLocalMemoryBuffer;
 import voxel.common.world.SectionSerializationUtil;
 import voxel.common.world.SectionSerializer;
@@ -32,43 +33,59 @@ public class SectionSerializationStorage extends SectionStorage {
     private static final ThreadLocalMemoryBuffer MEMORY_CACHE = new ThreadLocalMemoryBuffer(SectionSerializationUtil.BIGGEST_SERIALIZED_SECTION_SIZE + 1024);
 
     public int loadSection(WorldSection into) {
-        var data = this.backend.getSectionData(into.key, MEMORY_CACHE.get().createUntrackedUnfreeableReference());
-        if (data != null) {
-            if (!SectionSerializer.deserialize(into, data)) {
-                // Keep the damaged bytes for diagnosis instead of deleting
-                // them. The live key is removed; level 0 is rebuilt by the
-                // next chunk ingest and higher levels rebuild when their
-                // children change.
-                try {
-                    this.backend.setSectionData(into.key | QUARANTINE_BIT, data);
-                } catch (Exception e) {
-                    Logger.error("Failed to quarantine corrupt section " + WorldEngine.pprintPos(into.key), e);
-                }
-                this.backend.deleteSectionData(into.key);
-                synchronized (into) {
-                    Arrays.fill(into.materializeData(), Mapper.AIR);
-                }
-                Logger.error("Section " + WorldEngine.pprintPos(into.key)
-                        + " was corrupt; quarantined the raw data and reset the section to air. "
-                        + "Level 0 rebuilds on the next chunk ingest; higher levels rebuild when their children change.");
-                return -1;
-            } else {
+        boolean measure = PerformanceCounters.isEnabled();
+        long readStart = measure ? System.nanoTime() : 0L;
+        long readBytes = 0L;
+        try {
+            var data = this.backend.getSectionData(into.key, MEMORY_CACHE.get().createUntrackedUnfreeableReference());
+            if (data == null) {
+                //TODO: if we need to fetch an lod from a server, send the request here and block until the request is finished
+                // the response should be put into the local db so that future data can just use that
+                // the server can also send arbitrary updates to the client for arbitrary lods
+                return 1;
+            }
+            readBytes = data.size;
+            if (SectionSerializer.deserialize(into, data)) {
                 return 0;
             }
-        } else {
-            //TODO: if we need to fetch an lod from a server, send the request here and block until the request is finished
-            // the response should be put into the local db so that future data can just use that
-            // the server can also send arbitrary updates to the client for arbitrary lods
-            return 1;
+
+            // Keep the damaged bytes for diagnosis instead of deleting them.
+            // The live key is removed; level 0 is rebuilt by the next chunk
+            // ingest and higher levels rebuild when their children change.
+            try {
+                this.backend.setSectionData(into.key | QUARANTINE_BIT, data);
+            } catch (Exception e) {
+                Logger.error("Failed to quarantine corrupt section " + WorldEngine.pprintPos(into.key), e);
+            }
+            this.backend.deleteSectionData(into.key);
+            synchronized (into) {
+                Arrays.fill(into.materializeData(), Mapper.AIR);
+            }
+            Logger.error("Section " + WorldEngine.pprintPos(into.key)
+                    + " was corrupt; quarantined the raw data and reset the section to air. "
+                    + "Level 0 rebuilds on the next chunk ingest; higher levels rebuild when their children change.");
+            return -1;
+        } finally {
+            if (measure) {
+                PerformanceCounters.recordDiskRead(System.nanoTime() - readStart, readBytes);
+            }
         }
     }
 
 
     @Override
     public void saveSection(WorldSection section) {
+        boolean measure = PerformanceCounters.isEnabled();
+        long writeStart = measure ? System.nanoTime() : 0L;
         var saveData = SectionSerializer.serialize(section);
-        this.backend.setSectionData(section.key, saveData);
-        saveData.free();
+        try {
+            this.backend.setSectionData(section.key, saveData);
+        } finally {
+            if (measure) {
+                PerformanceCounters.recordDiskWrite(System.nanoTime() - writeStart, saveData.size);
+            }
+            saveData.free();
+        }
     }
 
     @Override

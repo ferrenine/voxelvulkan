@@ -5,7 +5,9 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
+import voxel.client.config.VoxelConfig;
 import voxel.client.core.IGetVoxelRenderSystem;
+import voxel.client.core.util.PerformanceMetrics;
 import voxel.commonimpl.VoxelCommon;
 import voxel.commonimpl.WorldIdentifier;
 import voxel.commonimpl.importers.DHImporter;
@@ -31,14 +33,66 @@ public class VoxelCommands {
         return ClientCommandManager.literal("vx")
                 .then(ClientCommandManager.literal("reload")
                         .executes(VoxelCommands::reloadInstance))
-                .then(importCommand());
+                .then(importCommand())
+                .then(performanceCommand());
     }
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> registerFull() {
         return ClientCommandManager.literal("voxel")
                 .then(ClientCommandManager.literal("reload")
                         .executes(VoxelCommands::reloadInstance))
-                .then(importCommand());
+                .then(importCommand())
+                .then(performanceCommand());
+    }
+
+    private static LiteralArgumentBuilder<FabricClientCommandSource> performanceCommand() {
+        return ClientCommandManager.literal("perf")
+                .then(ClientCommandManager.literal("start")
+                        .executes(VoxelCommands::perfStart))
+                .then(ClientCommandManager.literal("stop")
+                        .executes(VoxelCommands::perfStop))
+                .then(ClientCommandManager.literal("reset")
+                        .executes(VoxelCommands::perfReset))
+                .then(ClientCommandManager.literal("dump")
+                        .executes(VoxelCommands::perfDump));
+    }
+
+    private static int perfStart(CommandContext<FabricClientCommandSource> ctx) {
+        VoxelConfig.CONFIG.performanceMetrics = true;
+        VoxelConfig.CONFIG.save();
+        PerformanceMetrics.start();
+        ctx.getSource().sendFeedback(Component.literal(
+                "Voxel performance metrics started. Run /vx perf dump to export the captured session."));
+        return 0;
+    }
+
+    private static int perfStop(CommandContext<FabricClientCommandSource> ctx) {
+        VoxelConfig.CONFIG.performanceMetrics = false;
+        VoxelConfig.CONFIG.save();
+        PerformanceMetrics.stop();
+        ctx.getSource().sendFeedback(Component.literal(
+                "Voxel performance metrics stopped. The captured session is still available via /vx perf dump."));
+        return 0;
+    }
+
+    private static int perfReset(CommandContext<FabricClientCommandSource> ctx) {
+        PerformanceMetrics.reset();
+        ctx.getSource().sendFeedback(Component.literal("Voxel performance metrics reset."));
+        return 0;
+    }
+
+    private static int perfDump(CommandContext<FabricClientCommandSource> ctx) {
+        Path directory = Minecraft.getInstance().gameDirectory.toPath().resolve("voxel-perf");
+        try {
+            var result = PerformanceMetrics.dump(directory);
+            ctx.getSource().sendFeedback(Component.literal(
+                    "Voxel perf: " + result.frames() + " frames -> " + result.json().toAbsolutePath()));
+            ctx.getSource().sendFeedback(Component.literal(
+                    "Voxel perf CSV: " + result.csv().toAbsolutePath()));
+            return 0;
+        } catch (IOException e) {
+            return commandError(ctx, "Failed to write Voxel perf dump: " + e);
+        }
     }
 
     private static LiteralArgumentBuilder<FabricClientCommandSource> importCommand() {

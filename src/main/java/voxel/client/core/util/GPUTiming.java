@@ -197,7 +197,9 @@ public class GPUTiming {
     }
 
     public String getDebug() {
-        if (!VoxelConfig.CONFIG.gpuTiming || this.disabled || this.lastIntervalCount <= 0) {
+        // Callers decide whether GPU timing is enabled; keeping the config
+        // lookup out of here lets the perf dump run headlessly in tests.
+        if (this.disabled || this.lastIntervalCount <= 0) {
             return "GpuTime: []";
         }
         StringBuilder str = new StringBuilder("GpuTime: [");
