@@ -1,7 +1,7 @@
 package voxel.client.core.rendering.building;
 
 import voxel.client.core.model.IdNotYetComputedException;
-import voxel.client.core.model.ModelFactory;
+import voxel.client.core.model.ModelLookup;
 import voxel.client.core.model.ModelQueries;
 import voxel.client.core.util.ScanMesher2D;
 import voxel.common.Logger;
@@ -42,7 +42,7 @@ public class RenderDataFactory {
 
 
     private final WorldEngine world;
-    private final ModelFactory modelMan;
+    private final ModelLookup modelMan;
 
     //private final long[] sectionData = new long[32*32*32*2];
     //Per-worker snapshot: the mesher must not read the live section array while
@@ -723,10 +723,11 @@ public class RenderDataFactory {
     //AUDIT-DEAD: emitMeshlets is accepted then silently dropped (never stored) —
     // dead plumbing through RenderGenerationService; remove when the meshlet
     // path is either revived or fully stripped.
-    public RenderDataFactory(WorldEngine world, ModelFactory modelManager, boolean emitMeshlets) {
+    public RenderDataFactory(WorldEngine world, ModelLookup modelManager, boolean emitMeshlets) {
         this.world = world;
         this.modelMan = modelManager;
-        var level = Minecraft.getInstance().level;
+        var minecraft = Minecraft.getInstance();
+        var level = minecraft != null ? minecraft.level : null;
         if (level != null) {
             this.seaLevel = level.getSeaLevel();
         }

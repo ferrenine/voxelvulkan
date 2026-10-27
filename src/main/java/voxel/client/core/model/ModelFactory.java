@@ -68,7 +68,7 @@ import static voxel.client.core.model.ModelStore.MODEL_SIZE;
 
 //TODO: NOTE!!! is it worth even uploading as a 16x16 texture, since automatic lod selection... doing 8x8 textures might be perfectly ok!!!
 // this _quarters_ the memory requirements for the texture atlas!!! WHICH IS HUGE saving
-public class ModelFactory {
+public class ModelFactory implements ModelLookup {
     public static final int MODEL_TEXTURE_SIZE = 16;
     public static final int LAYERS = Integer.numberOfTrailingZeros(MODEL_TEXTURE_SIZE);
 
