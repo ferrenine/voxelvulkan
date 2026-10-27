@@ -16,6 +16,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.dimension.DimensionType;
+import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.File;
 import java.io.IOException;
@@ -27,6 +28,20 @@ import java.util.concurrent.CompletableFuture;
 public class VoxelCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> register() {
+        return ClientCommandManager.literal("vx")
+                .then(ClientCommandManager.literal("reload")
+                        .executes(VoxelCommands::reloadInstance))
+                .then(importCommand());
+    }
+
+    public static LiteralArgumentBuilder<FabricClientCommandSource> registerFull() {
+        return ClientCommandManager.literal("voxel")
+                .then(ClientCommandManager.literal("reload")
+                        .executes(VoxelCommands::reloadInstance))
+                .then(importCommand());
+    }
+
+    private static LiteralArgumentBuilder<FabricClientCommandSource> importCommand() {
         var imports = ClientCommandManager.literal("import")
                 .then(ClientCommandManager.literal("world")
                         .then(ClientCommandManager.argument("world_name", StringArgumentType.string())
@@ -48,41 +63,18 @@ public class VoxelCommands {
                         .executes(VoxelCommands::cancelImport));
 
         if (DHImporter.HasRequiredLibraries) {
-            imports = imports
-                    .then(ClientCommandManager.literal("distant_horizons")
-                    .then(ClientCommandManager.argument("sqlDbPath", StringArgumentType.string())
-                            .executes(VoxelCommands::importDistantHorizons)));
+            imports = imports.then(distantHorizonsImport());
         }
 
-        return ClientCommandManager.literal("vx")
-                .then(ClientCommandManager.literal("reload")
-                        .executes(VoxelCommands::reloadInstance))
-                .then(imports);
+        return imports;
     }
 
-    public static LiteralArgumentBuilder<FabricClientCommandSource> registerFull() {
-        return ClientCommandManager.literal("voxel")
-                .then(ClientCommandManager.literal("reload")
-                        .executes(VoxelCommands::reloadInstance))
-                .then(ClientCommandManager.literal("import")
-                        .then(ClientCommandManager.literal("world")
-                                .then(ClientCommandManager.argument("world_name", StringArgumentType.string())
-                                        .suggests(VoxelCommands::importWorldSuggester)
-                                        .executes(VoxelCommands::importWorld)))
-                        .then(ClientCommandManager.literal("bobby")
-                                .then(ClientCommandManager.argument("world_name", StringArgumentType.string())
-                                        .suggests(VoxelCommands::importBobbySuggester)
-                                        .executes(VoxelCommands::importBobby)))
-                        .then(ClientCommandManager.literal("raw")
-                                .then(ClientCommandManager.argument("path", StringArgumentType.string())
-                                        .executes(VoxelCommands::importRaw)))
-                        .then(ClientCommandManager.literal("zip")
-                                .then(ClientCommandManager.argument("zipPath", StringArgumentType.string())
-                                        .executes(VoxelCommands::importZip)
-                                        .then(ClientCommandManager.argument("innerPath", StringArgumentType.string())
-                                                 .executes(VoxelCommands::importZip))))
-                        .then(ClientCommandManager.literal("cancel")
-                                .executes(VoxelCommands::cancelImport)));
+    private static LiteralArgumentBuilder<FabricClientCommandSource> distantHorizonsImport() {
+        return ClientCommandManager.literal("distant_horizons")
+                .executes(VoxelCommands::importDistantHorizonsAuto)
+                .then(ClientCommandManager.argument("sqlDbPath", StringArgumentType.string())
+                        .suggests(VoxelCommands::importDistantHorizonsSuggester)
+                        .executes(VoxelCommands::importDistantHorizons));
     }
 
     public static int reloadInstanceDirect() {
@@ -117,28 +109,93 @@ public class VoxelCommands {
         return reloadInstanceDirect();
     }
 
+    private static int importDistantHorizonsAuto(CommandContext<FabricClientCommandSource> ctx) {
+        var server = Minecraft.getInstance().getSingleplayerServer();
+        if (server == null) {
+            return commandError(ctx, "自动查找只支持单机存档；请把世界文件夹或 DistantHorizons.sqlite 路径作为参数传入。");
+        }
+        var dbFile = server.getWorldPath(LevelResource.ROOT).resolve("DistantHorizons.sqlite").toFile();
+        if (!dbFile.isFile()) {
+            return commandError(ctx, "未找到 " + dbFile.getAbsolutePath()
+                    + "，请把世界文件夹或 DistantHorizons.sqlite 路径作为参数传入。");
+        }
+        return startDistantHorizonsImport(ctx, dbFile);
+    }
+
     private static int importDistantHorizons(CommandContext<FabricClientCommandSource> ctx) {
-        var instance = (VoxelClientInstance)VoxelCommon.getInstance();
-        if (instance == null) {
-            ctx.getSource().sendError(Component.literal("Voxel must be enabled in settings to use this"));
-            return 1;
-        }
         var dbFile = new File(ctx.getArgument("sqlDbPath", String.class));
-        if (!dbFile.exists()) {
-            return 1;
-        }
         if (dbFile.isDirectory()) {
             dbFile = dbFile.toPath().resolve("DistantHorizons.sqlite").toFile();
-            if (!dbFile.exists()) {
-                return 1;
-            }
+        }
+        if (!dbFile.isFile()) {
+            return commandError(ctx, "找不到 DistantHorizons.sqlite: " + dbFile.getAbsolutePath());
+        }
+        return startDistantHorizonsImport(ctx, dbFile);
+    }
+
+    private static int startDistantHorizonsImport(CommandContext<FabricClientCommandSource> ctx, File dbFile) {
+        var instance = (VoxelClientInstance)VoxelCommon.getInstance();
+        if (instance == null) {
+            return commandError(ctx, "Voxel 在设置里被关闭了，无法导入。");
+        }
+        var level = Minecraft.getInstance().level;
+        var engine = WorldIdentifier.ofEngine(level);
+        if (engine == null) {
+            return commandError(ctx, "请先进入一个世界再导入。");
         }
 
-        File dbFile_ = dbFile;
-        var engine = WorldIdentifier.ofEngine(Minecraft.getInstance().level);
-        if (engine==null)return 1;
-        return instance.getImportManager().makeAndRunIfNone(engine, ()->
-                new DHImporter(dbFile_, engine, Minecraft.getInstance().level, instance.getServiceManager(), instance.savingServiceRateLimiter))?0:1;
+        boolean started = instance.getImportManager().makeAndRunIfNone(engine, ()->
+                new DHImporter(dbFile, engine, level, instance.getServiceManager(), instance.savingServiceRateLimiter));
+        if (!started) {
+            return commandError(ctx, "已经有导入任务在运行，请等待完成或先执行 /vx import cancel。");
+        }
+        ctx.getSource().sendFeedback(Component.literal("开始导入 Distant Horizons: " + dbFile.getAbsolutePath()));
+        return 0;
+    }
+
+    private static int commandError(CommandContext<FabricClientCommandSource> ctx, String message) {
+        ctx.getSource().sendError(Component.literal(message));
+        return 1;
+    }
+
+    private static CompletableFuture<Suggestions> importDistantHorizonsSuggester(
+            CommandContext<FabricClientCommandSource> ctx, SuggestionsBuilder sb) {
+        String raw = sb.getRemaining().replace('\\', '/');
+        if (raw.startsWith("\"")) {
+            raw = raw.substring(1);
+        }
+        if (raw.endsWith("\"")) {
+            raw = raw.substring(0, raw.length()-1);
+        }
+
+        Path root = Minecraft.getInstance().gameDirectory.toPath().resolve("saves");
+        Path dir = root;
+        String prefix = "";
+        int slash = raw.lastIndexOf('/');
+        if (slash >= 0) {
+            prefix = raw.substring(0, slash+1);
+            try {
+                dir = root.resolve(raw.substring(0, slash));
+            } catch (Exception e) {
+                return sb.buildFuture();
+            }
+        }
+        String remaining = raw.substring(slash+1);
+        final String suggestionPrefix = prefix;
+
+        try (var entries = Files.list(dir)) {
+            entries.filter(path -> Files.isDirectory(path)
+                            || path.getFileName().toString().endsWith(".sqlite"))
+                    .map(path -> path.getFileName().toString()
+                            + (Files.isDirectory(path) ? "/" : ""))
+                    .filter(name -> SharedSuggestionProvider.matchesSubStr(remaining, name))
+                    .sorted()
+                    .limit(50)
+                    .forEach(name -> sb.suggest(suggestionPrefix + name));
+        } catch (Exception ignored) {
+            // A missing or unreadable saves directory simply has no suggestions.
+        }
+        return sb.buildFuture();
     }
 
     private static boolean fileBasedImporter(File directory) {
