@@ -856,12 +856,10 @@ public class ModelFactory {
         boolean isLeaves = blockState.getBlock() instanceof LeavesBlock;
         if (isLeaves) {
             // Cutout leaves rely on seeing the inside of the opposite face
-            // through their alpha holes (CullLeaves does this explicitly with
-            // inner offset faces). A backface-culled LOD cube turns every hole
-            // into sky, so far canopies dissolve into floating fragments.
-            // Fill the leaf holes in the baked view as well: the LOD cannot
-            // reproduce CullLeaves' 0.01-offset inner cube.
-            TextureUtils.fillLeafHoles(textureData);
+            // through their alpha holes. Keep the cutout silhouette; do NOT
+            // fill the holes here, or distant canopies become solid green
+            // cubes. Mip-filtered cutout alpha (quads.frag) fades the holes
+            // smoothly at distance instead.
             needsDoubleSidedQuads = true;
         }
         boolean cullsSame = isStair || isRodOrChain;
