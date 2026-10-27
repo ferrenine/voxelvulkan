@@ -149,6 +149,7 @@ public final class VoxelModSettings {
                                 v -> Component.literal(v + " blk"),
                                 v -> cfg.subDivisionSize = v, () -> Math.round(cfg.subDivisionSize))
                                 .setImpact(PerformanceImpact.HIGH),
+                        toggle("voxel.option.adaptive_lod", v -> cfg.adaptiveLOD = v, () -> cfg.adaptiveLOD),
                         range("voxel.option.lod_scale", 50, 100, 5,
                                 v -> Component.literal(v + "%"),
                                 v -> cfg.lodRenderScale = v / 100.0f, () -> Math.round(cfg.lodRenderScale * 100))

@@ -2,6 +2,7 @@ package voxel.common.util;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -38,14 +39,38 @@ public final class AtomicFiles {
         try {
             Files.writeString(temporary, contents, StandardCharsets.UTF_8,
                     StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-            try {
-                Files.move(temporary, target,
-                        StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
-            }
+            moveWithRetry(temporary, target);
         } finally {
             Files.deleteIfExists(temporary);
+        }
+    }
+
+    /**
+     * Windows can briefly deny the rename when a virus scanner, indexer or
+     * another reader still has the target open. Retry a few times before
+     * surfacing the error; the temporary file remains complete either way.
+     */
+    private static void moveWithRetry(Path source, Path target) throws IOException {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                try {
+                    Files.move(source, target,
+                            StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                } catch (AtomicMoveNotSupportedException e) {
+                    Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+                return;
+            } catch (AccessDeniedException e) {
+                if (attempt >= 3) {
+                    throw e;
+                }
+                try {
+                    Thread.sleep(10L * (attempt + 1L));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
         }
     }
 }

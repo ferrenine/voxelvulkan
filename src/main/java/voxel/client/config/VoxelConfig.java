@@ -55,6 +55,10 @@ public class VoxelConfig {
     // keeps subdividing out to several kilometres, so the view collapses to
     // LOD 0 and the far ring is never used.
     public float subDivisionSize = 64.0f;
+    /** Coarsens distant LOD automatically when the frame rate drops. */
+    public boolean adaptiveLOD = true;
+    /** Runtime-only effective value; never written to the config file. */
+    public transient float effectiveSubDivisionSize = 64.0f;
 
     // Far LOD is rendered at this fraction of the window size and upscaled by
     // the final blit. 1.0 = native; 0.75 keeps 56% of the pixels.
@@ -137,6 +141,7 @@ public class VoxelConfig {
             this.subDivisionSize = 64.0f;
         }
         this.subDivisionSize = Math.clamp(this.subDivisionSize, 32.0f, 256.0f);
+        this.effectiveSubDivisionSize = this.subDivisionSize;
         this.lodRenderScale = Math.clamp(this.lodRenderScale, 0.5f, 1.0f);
         // Older builds allowed up to availableProcessors()/1.5 workers. Clamp
         // stale configs to the conservative budget shown by the UI.

@@ -28,6 +28,7 @@ import voxel.client.core.rendering.section.geometry.IGeometryData;
 import voxel.client.core.rendering.util.DownloadStream;
 import voxel.client.core.rendering.util.PrintfDebugUtil;
 import voxel.client.core.rendering.util.UploadStream;
+import voxel.client.core.util.AdaptiveLod;
 import voxel.client.core.util.GPUTiming;
 import voxel.client.core.util.BerylUtil;
 import voxel.client.core.util.PerformanceMetrics;
@@ -385,6 +386,7 @@ public class VoxelRenderSystem {
             }
             this.lastOpaqueStartNanos = now;
         }
+        this.autoBalanceSubDivSize();
 
         TimingStatistics.all.start();
         GPUTiming.INSTANCE.marker("opaque");
@@ -545,24 +547,32 @@ public class VoxelRenderSystem {
         }
     }
 
-    //AUDIT-DEAD: never called — intentionally so. Its floor is 28 px, the
-    // exact value that makes the traversal walk down to LOD 0 everywhere. On a
-    // GPU that holds 65+ FPS it would drive subDivisionSize back to 28 and
-    // undo VoxelConfig.validate(); only enable it with the floor raised to the
-    // config default (64).
-    private void autoBalanceSubDivSize() {
-        boolean canDecreaseSize = this.renderGen.getTaskCount() < 300;
-        int MIN_FPS = 55;
-        int MAX_FPS = 65;
-        float INCREASE_PER_SECOND = 60;
-        float DECREASE_PER_SECOND = 30;
-        if (Minecraft.getInstance().getFps() < MIN_FPS) {
-            VoxelConfig.CONFIG.subDivisionSize = Math.min(VoxelConfig.CONFIG.subDivisionSize + INCREASE_PER_SECOND / Math.max(1f, Minecraft.getInstance().getFps()), 256);
-        }
+    private long lastAdaptiveAdjustNanos;
 
-        if (MAX_FPS < Minecraft.getInstance().getFps() && canDecreaseSize) {
-            VoxelConfig.CONFIG.subDivisionSize = Math.max(VoxelConfig.CONFIG.subDivisionSize - DECREASE_PER_SECOND / Math.max(1f, Minecraft.getInstance().getFps()), 28);
+    /**
+     * Coarsens the far LOD while the frame rate is below target, then walks
+     * back to the user's configured subdivision when the view stabilises. The
+     * configured value is a floor, so this never makes the image finer than
+     * the user asked for and never persists a transient value.
+     */
+    private void autoBalanceSubDivSize() {
+        var cfg = VoxelConfig.CONFIG;
+        if (!cfg.adaptiveLOD) {
+            cfg.effectiveSubDivisionSize = cfg.subDivisionSize;
+            return;
         }
+        long now = System.nanoTime();
+        if (now - this.lastAdaptiveAdjustNanos < 500_000_000L) {
+            return;
+        }
+        var mc = Minecraft.getInstance();
+        if (mc.isPaused() || !mc.isWindowActive()) {
+            return;
+        }
+        this.lastAdaptiveAdjustNanos = now;
+        boolean canDecrease = this.renderGen.getTaskCount() < 300;
+        cfg.effectiveSubDivisionSize = AdaptiveLod.step(
+                cfg.effectiveSubDivisionSize, cfg.subDivisionSize, mc.getFps(), canDecrease);
     }
 
     private static Matrix4f computeProjectionMat(Matrix4fc base) {
@@ -617,7 +627,10 @@ public class VoxelRenderSystem {
         String pipeline = this.isBerylPipeline() ? "Beryl" : "Normal";
         long usedGeometryMb = this.nodeManager.getUsedGeometryCapacity() >> 20;
         long geometryCapMb = this.nodeManager.getGeometryCapacity() >> 20;
-        debug.add("LOD [" + pipeline + "]: SDS " + VoxelConfig.CONFIG.subDivisionSize
+        float sds = VoxelConfig.CONFIG.effectiveSubDivisionSize;
+        float baseSds = VoxelConfig.CONFIG.subDivisionSize;
+        debug.add("LOD [" + pipeline + "]: SDS " + sds
+                + (sds != baseSds ? " (base " + baseSds + ")" : "")
                 + " | RS " + VoxelConfig.CONFIG.lodRenderScale
                 + " | UC/GC " + usedGeometryMb + "/" + geometryCapMb + " MB");
 

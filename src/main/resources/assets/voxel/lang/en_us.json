@@ -56,6 +56,9 @@
   "voxel.option.sub_division": "Sub-division Size",
   "voxel.option.sub_division.tooltip": "Edge length (in blocks) of the finest LOD section. Larger values cut quad count and GPU cost in exchange for chunkier silhouettes.",
 
+  "voxel.option.adaptive_lod": "Adaptive LOD",
+  "voxel.option.adaptive_lod.tooltip": "When the frame rate drops (for example while looking across a large vista), temporarily coarsen the far LOD above the configured sub-division size. It returns to the configured value when the view stabilises; this is a performance/quality trade-off and can cause visible LOD changes.",
+
   "voxel.option.lod_scale": "LOD Resolution Scale",
   "voxel.option.lod_scale.tooltip": "Internal render resolution of the distant LOD pass as a percentage of the window. Lower values save a lot of GPU time but soften far terrain.",
 

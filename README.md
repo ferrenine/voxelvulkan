@@ -5,6 +5,7 @@ A GPU-driven voxel LOD renderer for **Minecraft 1.21.11 (Fabric)**, running on *
 ## Features
 
 - **GPU-driven hierarchical LOD**: Node traversal, occlusion culling, and draw command generation are completed in Vulkan compute, reducing CPU submission overhead.
+- **Adaptive far LOD**: when the frame rate drops while looking across a large vista, the far LOD is temporarily coarsened above the configured sub-division size and returns once the view stabilises. It can be disabled in the display settings.
 - **MDIC indirect drawing**: Use `vkCmdDrawIndexedIndirectCount` with GPU-side counting, batch submission of large sections.
 - **Vulkan native resources and synchronization**: Persistent mapping upload/download streams, explicit pipeline barriers, descriptor ring, and deferred destruction, adapted to the frame queue of VulkanMod.
 - **Optional Beryl integration**: Access Beryl's Vulkan shader pipeline and shadow rendering.

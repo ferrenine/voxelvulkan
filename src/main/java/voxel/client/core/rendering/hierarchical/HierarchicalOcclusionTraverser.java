@@ -178,7 +178,7 @@ public class HierarchicalOcclusionTraverser {
         // pixel threshold too; otherwise a 0.75 render target would silently
         // make every LOD band 1.33x more detailed.
         final float renderScale = Math.clamp(VoxelConfig.CONFIG.lodRenderScale, 0.5f, 1.0f);
-        final float subDivision = VoxelConfig.CONFIG.subDivisionSize * renderScale;
+        final float subDivision = VoxelConfig.CONFIG.effectiveSubDivisionSize * renderScale;
         final float screenspaceAreaDecreasingSize = subDivision * subDivision;
         //Screen space size for descending
         MemoryUtil.memPutFloat(ptr, screenspaceAreaDecreasingSize / (viewport.width * viewport.height)); ptr += 4;

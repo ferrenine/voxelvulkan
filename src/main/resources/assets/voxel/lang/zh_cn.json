@@ -38,6 +38,9 @@
   "voxel.option.sub_division": "细分尺寸",
   "voxel.option.sub_division.tooltip": "最细一级 LOD 区块的边长（格）。调大可以显著减少四边形数量和 GPU 开销，代价是轮廓更方。",
 
+  "voxel.option.adaptive_lod": "自适应 LOD",
+  "voxel.option.adaptive_lod.tooltip": "帧率下降时（例如看向大片远景），在配置的细分尺寸之上临时加粗远处 LOD；视野稳定后再回到配置值。这是性能/画质权衡，可能看到 LOD 变化。",
+
   "voxel.option.lod_scale": "LOD 分辨率比例",
   "voxel.option.lod_scale.tooltip": "远景 LOD pass 的内部渲染分辨率，按窗口百分比计算。调低能省大量 GPU 时间，但远处会变糊。",
 
