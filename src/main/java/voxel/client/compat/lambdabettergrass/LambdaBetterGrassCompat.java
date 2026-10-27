@@ -42,11 +42,12 @@ import voxel.common.Logger;
  * dependency: without LBG every method here is a no-op and no LBG class is
  * loaded.</p>
  *
- * <p>The mesher deliberately applies the fully-connected rule at LOD0 even in
- * LBG's FASTEST mode, where LBG would rewrite every side. Far LOD uses the
- * connected model for all side faces. The conservative LOD0 choice keeps
- * grass blocks above stone/dirt looking vanilla instead of painting every
- * cliff green.</p>
+ * <p>The mesher uses the connected model for every visible side face of a
+ * better-grass state at every LOD. It deliberately does not re-check LBG's
+ * fancy per-face connectivity at LOD0: at distance a single block then showed
+ * one green side and one vanilla dirt side (snow layers, tall grass and
+ * terrace edges change the diagonal neighbour), which reads as missing sides
+ * next to the near terrain.</p>
  */
 public final class LambdaBetterGrassCompat {
     private static final String LBG_MOD_PACKAGE = "dev.lambdaurora.lambdabettergrass.";

@@ -122,71 +122,6 @@ public class RenderDataFactory {
         private final long[] lightKeyScratch = new long[16 * 16];
         private final boolean[] lightUsedScratch = new boolean[16 * 16];
 
-        /** Raw block state id at a local section position, or -1 when outside. */
-        private int rawBlockAt(int x, int y, int z) {
-            if ((x | y | z) < 0 || x > 31 || y > 31 || z > 31) {
-                return -1;
-            }
-            return Mapper.getBlockId(RenderDataFactory.this.rawSnapshot[(y << 10) | (z << 5) | x]);
-        }
-
-        /**
-         * Mirrors the fully-connected case of LambdaBetterGrass's side pass.
-         * LBG's {@code canFullyConnect} checks the block diagonally below the
-         * face and accepts any non-solid-render block in front (tall grass,
-         * flowers, snow layers, leaves, water...), not only air. This mesher
-         * only emits a face when the block in front is non-opaque, so the
-         * front test is already covered here; requiring real air left every
-         * grass side behind vegetation with the vanilla dirt texture. The
-         * diagonal-below sample also falls back to the neighbour boundary
-         * snapshot at section edges.
-         */
-        private boolean isLBGConnected(int face, int qx, int qz, int auxPos) {
-            if (RenderDataFactory.this.lodLevel != 0) {
-                return false;
-            }
-            int bx;
-            int by;
-            int bz;
-            if (this.axis == 1) {
-                bx = qx;
-                by = qz;
-                bz = auxPos;
-            } else if (this.axis == 2) {
-                bx = auxPos;
-                by = qx;
-                bz = qz;
-            } else {
-                return false;
-            }
-
-            int target = rawBlockAt(bx, by, bz);
-            if (target <= 0) {
-                return false;
-            }
-
-            int dir = (face & 1) == 1 ? 1 : -1;
-            int ax = bx;
-            int ay = by;
-            int az = bz;
-            if (this.axis == 1) {
-                az += dir;
-            } else {
-                ax += dir;
-            }
-
-            // The quad exists, so the block in front is already known to be
-            // non-opaque (LBG's isAir() || !isSolidRender front test). The
-            // diagonal-below cell can sit just across a section border; use the
-            // neighbour boundary snapshot there instead of falling back to the
-            // vanilla side for a one-block stripe at every section edge.
-            int below = rawBlockAt(ax, ay - 1, az);
-            if (below < 0) {
-                long neighbor = getNeighborRawBlock(ax, ay - 1, az);
-                below = neighbor == 0L ? -1 : Mapper.getBlockId(neighbor);
-            }
-            return below == target;
-        }
 
         //Note x, z are in top right
         @Override
@@ -255,18 +190,21 @@ public class RenderDataFactory {
             boolean lava = ModelQueries.isLava(emitModelMeta);
             boolean lavaFlow = lava && RenderDataFactory.this.lodLevel == 0;
 
-            // LambdaBetterGrass connected-side sibling. Coarse cells take it
-            // for every side face (one cell already stands for a volume); at
-            // LOD0 the split branch picks it per block from the raw neighbours.
+            // LambdaBetterGrass connected-side sibling. Every visible side face
+            // of a better-grass state takes the connected texture at every LOD.
+            // Per-face fancy connectivity was tried first, but at distance a
+            // single block then showed one green side and one vanilla dirt side
+            // (snow layers, tall grass and terrace edges all change the
+            // diagonal neighbour), which reads as missing sides next to the
+            // near terrain. The connected texture is the closest match to what
+            // LBG shows on the nearby blocks.
             int lbgVariantId = face > 1
                     ? RenderDataFactory.this.modelMan.getLambdabettergrassVariant(modelId) : -1;
-            if (lbgVariantId != -1 && RenderDataFactory.this.lodLevel > 0) {
+            if (lbgVariantId != -1) {
                 modelId = lbgVariantId;
                 data = (data & ~(0xFFFFL << 26)) | (Integer.toUnsignedLong(modelId) << 26);
                 emitModelMeta = RenderDataFactory.this.modelMan.getModelMetadataFromClientId(modelId);
             }
-            boolean lbgSideSplit = lbgVariantId != -1 && face > 1
-                    && RenderDataFactory.this.lodLevel == 0;
 
             // A coarse fluid cell reports water because some block inside its
             // 2^lodLevel volume is water, but its top face is emitted at the
@@ -431,7 +369,7 @@ public class RenderDataFactory {
                 }
             }
 
-            if (split || lbgSideSplit) {
+            if (split) {
                 int bufferIdx = type+(type==2?face:0);
                 for (int dx = 0; dx < length; dx++) {
                     for (int dz = 0; dz < width; dz++) {
@@ -446,10 +384,6 @@ public class RenderDataFactory {
                         encPos |= qz << (axis==1?16:11);
                         encPos |= auxPos << shiftAmount;
                         long splitQuad = data | Integer.toUnsignedLong(encPos);
-                        if (lbgSideSplit && isLBGConnected(face, qx, qz, auxPos)) {
-                            splitQuad = (splitQuad & ~(0xFFFFL << 26))
-                                    | (Integer.toUnsignedLong(lbgVariantId) << 26);
-                        }
                         long splitLight = RenderDataFactory.this.computeCornerLightAO(
                                 qx, qz, 1, 1, axis, axisSide, auxPos, fallbackLight, volumeLight, leafSelfLight);
                         if (lava) {
