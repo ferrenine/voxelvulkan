@@ -60,9 +60,13 @@ public class VoxelCommands {
     private static int perfStart(CommandContext<FabricClientCommandSource> ctx) {
         VoxelConfig.CONFIG.performanceMetrics = true;
         VoxelConfig.CONFIG.save();
+        RenderStatistics.enabled = RenderStatistics.compiled;
         PerformanceMetrics.start();
+        String suffix = RenderStatistics.compiled
+                ? ""
+                : " Restart the client once to compile the VS/QC counters into the shaders.";
         ctx.getSource().sendFeedback(Component.literal(
-                "Voxel performance metrics started. Run /vx perf dump to export the captured session."));
+                "Voxel performance metrics started. Run /vx perf dump to export the captured session." + suffix));
         return 0;
     }
 
@@ -70,6 +74,9 @@ public class VoxelCommands {
         VoxelConfig.CONFIG.performanceMetrics = false;
         VoxelConfig.CONFIG.save();
         PerformanceMetrics.stop();
+        // The shader atomics stay compiled until the renderer is rebuilt, but
+        // stop the per-frame 1 KiB readback and buffer clear immediately.
+        RenderStatistics.enabled = VoxelConfig.CONFIG.renderStatistics;
         ctx.getSource().sendFeedback(Component.literal(
                 "Voxel performance metrics stopped. The captured session is still available via /vx perf dump."));
         return 0;

@@ -69,6 +69,7 @@ public class GeometryCache {
         this.lock.lock();
         this.cache.values().forEach(BuiltSection::free);
         this.cache.clear();
+        this.currentSize = 0L;
         this.lock.unlock();
     }
 }

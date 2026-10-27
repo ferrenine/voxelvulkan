@@ -36,9 +36,13 @@ layout(location = 2) in vec3 vRelPos;
 layout(location = 3) in float vSky;
 layout(location = 4) in float vBlock;
 layout(location = 5) in float vAO;
+// Vertex-shaded Beryl albedo factors: flat pow(tint*faceShade,2.2) and smooth
+// pow(AO,2.2). vTintPow.x < 0 keeps the old per-pixel partial-tint path.
+layout(location = 6) in flat vec3 vTintPow;
+layout(location = 7) in float vAOPow;
 
 #ifdef DEBUG_RENDER
-layout(location = 7) in flat uint quadDebug;
+layout(location = 8) in flat uint quadDebug;
 #endif
 
 
@@ -397,8 +401,16 @@ vec4 computeColour(vec2 texturePos, vec4 colour) {
         // Beryl terrain.fsh: texColor = texture(atlas) * vertexColor, and
         // vertexColor = pow(tint * faceShade * AO, 2.2) in terrain.vsh. The
         // atlas sample is already linear (hardware sRGB decode, see above).
-        vec3 vertexColour = tintFactor * aoFactor * faceShade;
-        vec3 albedo = rawTex * pow(max(vertexColour, vec3(0.0f)), vec3(2.2f));
+        // The vertex shader normally supplies the split factors, so this path
+        // does no per-pixel pow. Partial tint (state 1) still needs the
+        // per-pixel texture test and falls back to the original formula.
+        vec3 albedo;
+        if (vTintPow.x >= 0.0f) {
+            albedo = rawTex * vTintPow * vAOPow;
+        } else {
+            vec3 vertexColour = tintFactor * aoFactor * faceShade;
+            albedo = rawTex * pow(max(vertexColour, vec3(0.0f)), vec3(2.2f));
+        }
 
         // Beryl's terrain.vsh computes lightY = (UV2.y / 256)^2 where UV2.y is
         // skyLight * 16, i.e. (sky / 16)^2. Using /15 here made the LOD direct
@@ -618,6 +630,8 @@ void main() {
     vec2 uvClamped = clamp(uvBlocks, vec2(0.0f), maxUv);
     vec2 uv2 = modf(uvClamped, tile)*(1.0/(vec2(3.0,2.0)*256.0));
     vec4 colour;
+    vec2 dx;
+    vec2 dy;
     vec2 texPos = uv2 + getBaseUV();
 //This is deprecated, TODO: remove the non mip code path
     //if (useMipmaps())
@@ -639,8 +653,8 @@ void main() {
         // derivatives, so the hardware selects the same mip the near field
         // would and the mip chain does the anti-aliasing.
         float gradScale = mix(1.0f, 0.26f, detailWeight);
-        vec2 dx = rawDx * gradScale;
-        vec2 dy = rawDy * gradScale;
+        dx = rawDx * gradScale;
+        dy = rawDy * gradScale;
         if (detailWeight > 0.01f && minorD > 1e-7f) {
             // Only in the magnified transition band cap the anisotropy so
             // zoomed-in 16x16 block detail stays crisp.
@@ -651,7 +665,6 @@ void main() {
             if (slx > maxD) dx *= maxD / slx;
             if (sly > maxD) dy *= maxD / sly;
         }
-        colour = textureGrad(blockModelAtlas, texPos, dx, dy);
     }// else {
     //    colour = textureLod(blockModelAtlas, texPos, 0);
     //}
@@ -698,6 +711,12 @@ void main() {
     }
     #endif
     #endif
+
+    // Atlas sample happens after the cheap UV/depth rejects: far LOD quads
+    // cover a lot of screen, and pixels hidden behind the near field should
+    // not pay the filtered atlas fetch. The explicit gradients above were
+    // already computed in uniform control flow for textureGrad.
+    colour = textureGrad(blockModelAtlas, texPos, dx, dy);
 
     //Also, small quad is really fking over the mipping level somehow
     // Cutout alpha comes from the already mip-filtered colour sample.

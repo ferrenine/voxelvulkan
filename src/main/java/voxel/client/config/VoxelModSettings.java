@@ -52,6 +52,7 @@ public final class VoxelModSettings {
     private static boolean snapStatistics;
     private static boolean snapEnabled;
     private static boolean snapRendering;
+    private static boolean snapAffineLightMerge;
 
     /** Pages created by the latest settings-screen build, used by Mod Menu to select Voxel. */
     private static List<OptionPage> lastPages = List.of();
@@ -150,6 +151,12 @@ public final class VoxelModSettings {
                                 v -> cfg.subDivisionSize = v, () -> Math.round(cfg.subDivisionSize))
                                 .setImpact(PerformanceImpact.HIGH),
                         toggle("voxel.option.adaptive_lod", v -> cfg.adaptiveLOD = v, () -> cfg.adaptiveLOD),
+                        toggle("voxel.option.cull_vanilla_lod0", v -> cfg.cullVanillaCoveredLod0 = v,
+                                () -> cfg.cullVanillaCoveredLod0),
+                        toggle("voxel.option.affine_light_merge", v -> cfg.affineLightMerge = v,
+                                () -> cfg.affineLightMerge),
+                        toggle("voxel.option.geometry_cache", v -> cfg.enableGeometryCache = v,
+                                () -> cfg.enableGeometryCache),
                         range("voxel.option.lod_scale", 50, 100, 5,
                                 v -> Component.literal(v + "%"),
                                 v -> cfg.lodRenderScale = v / 100.0f, () -> Math.round(cfg.lodRenderScale * 100))
@@ -202,6 +209,9 @@ public final class VoxelModSettings {
         VoxelRenderSystem system = IGetVoxelRenderSystem.getNullable();
         if (system != null) {
             system.setRenderDistance(cfg.sectionRenderDistance);
+            if (!cfg.enableGeometryCache) {
+                system.clearGeometryCache();
+            }
         }
 
         VoxelInstance instance = VoxelCommon.getInstance();
@@ -218,6 +228,7 @@ public final class VoxelModSettings {
         snapStatistics = cfg.renderStatistics;
         snapEnabled = cfg.enabled;
         snapRendering = cfg.enableRendering;
+        snapAffineLightMerge = cfg.affineLightMerge;
         snapshotValid = true;
     }
 
@@ -231,7 +242,8 @@ public final class VoxelModSettings {
                 || snapWaterSsr != cfg.enableWaterSSR
                 || snapStatistics != cfg.renderStatistics
                 || snapEnabled != cfg.enabled
-                || snapRendering != cfg.enableRendering;
+                || snapRendering != cfg.enableRendering
+                || snapAffineLightMerge != cfg.affineLightMerge;
     }
 
     private static OptionBlock block(String titleKey, Option<?>... options) {

@@ -41,6 +41,15 @@
   "voxel.option.adaptive_lod": "自适应 LOD",
   "voxel.option.adaptive_lod.tooltip": "帧率下降时（例如看向大片远景），在配置的细分尺寸之上临时加粗远处 LOD；视野稳定后再回到配置值。这是性能/画质权衡，可能看到 LOD 变化。",
 
+  "voxel.option.cull_vanilla_lod0": "剔除原版区块覆盖的 LOD0",
+  "voxel.option.cull_vanilla_lod0.tooltip": "当一个 LOD0 区块的 8 个原版子区块都已编译完成时，跳过这些 LOD0 几何。原版区块会绘制同样的方块，因此不会改变画面，只是去掉重复的近景几何。如果区块加载时出现空洞，可以关闭此项。",
+
+  "voxel.option.affine_light_merge": "仿射光照合并（实验）",
+  "voxel.option.affine_light_merge.tooltip": "当 LOD0 共面矩形的所有角点光照/AO 落在同一个仿射平面上时，直接合并为一个大面，不增加片元开销。真实建面负载实测只有约 0.06% 的拆分 quad 完全仿射，因此默认关闭，不推荐为性能开启。",
+
+  "voxel.option.geometry_cache": "CPU 几何缓存",
+  "voxel.option.geometry_cache.tooltip": "在内存中保留已构建区块网格的副本。实测命中率低于 0.3%，却要克隆数 GB 本地缓冲，因此默认关闭。",
+
   "voxel.option.lod_scale": "LOD 分辨率比例",
   "voxel.option.lod_scale.tooltip": "远景 LOD pass 的内部渲染分辨率，按窗口百分比计算。调低能省大量 GPU 时间，但远处会变糊。",
 

@@ -91,4 +91,33 @@ public class TimingStatistics {
             sampler.commitFrame();
         }
     }
+
+    /**
+     * Commits every sampler that finished this frame and discards the partial
+     * time of one that was interrupted (pause, resize, early return). The
+     * harness calls this from the frame-end hook, where a stalled sampler must
+     * not throw or leak its elapsed time into the next frame.
+     */
+    public static void updateSafe() {
+        boolean active = false;
+        for (TimeSampler sampler : REGISTRY) {
+            if (sampler.open || sampler.elapsedNanos != 0L) {
+                active = true;
+                break;
+            }
+        }
+        // Idle frames (pause/menu) would otherwise decay every average to zero
+        // without contributing any measured render work.
+        if (!active) {
+            return;
+        }
+        for (TimeSampler sampler : REGISTRY) {
+            if (sampler.open) {
+                sampler.open = false;
+                sampler.elapsedNanos = 0L;
+            } else {
+                sampler.commitFrame();
+            }
+        }
+    }
 }

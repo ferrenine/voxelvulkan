@@ -24,6 +24,9 @@ layout(binding = SCENE_UNIFORM_BINDING, std140) uniform SceneUniform {
     uint renderQueueMaxSize;
     uint frameId;
     uint requestQueueSize;
+    // xyz = LOD0 section at the low corner of the 16^3 coverage mask,
+    // w = 1 while the mask is valid. std140 places this at byte 208.
+    ivec4 lod0MaskParams;
 };
 
 #import <voxel:lod/hierarchical/queue.glsl>
@@ -52,6 +55,13 @@ layout(binding = STATISTICS_BUFFER_BINDING, std430) restrict buffer statisticsBu
     uint renderCounts[MAX_ITERATIONS];
 };
 #endif
+
+// One bit per LOD0 section in a 16^3 window centered on the camera section.
+// A set bit means all eight vanilla child sections have a compiled mesh, so
+// the LOD0 section would only duplicate what the vanilla pass already draws.
+layout(binding = LOD0_MASK_BINDING, std430) readonly buffer Lod0MaskBuffer {
+    uint lod0Mask[];
+};
 
 void addRequest(inout UnpackedNode node) {
     //printf("Put node decend request");
@@ -143,10 +153,28 @@ void enqueueSelfForRender(in UnpackedNode node) {
 }
 
 
+bool isVanillaCoveredLod0(in UnpackedNode node) {
+    if (node.lodLevel != 0u || lod0MaskParams.w == 0) {
+        return false;
+    }
+    ivec3 rel = node.pos - lod0MaskParams.xyz;
+    if (any(lessThan(rel, ivec3(0))) || any(greaterThanEqual(rel, ivec3(16)))) {
+        return false;
+    }
+    uint bit = uint(rel.x + rel.y * 16 + rel.z * 256);
+    return (lod0Mask[bit >> 5] & (1u << (bit & 31u))) != 0u;
+}
+
 void traverse(in UnpackedNode node) {
     #ifdef HAS_STATISTICS
     atomicAdd(traversalCounts[node.lodLevel], 1);
     #endif
+
+    // Nothing in this LOD0 section is visible that vanilla does not already
+    // draw. Skipping here also avoids requesting/meshing its duplicate mesh.
+    if (isVanillaCoveredLod0(node)) {
+        return;
+    }
 
     //Compute screenspace
     setupScreenspace(node);

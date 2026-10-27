@@ -7,12 +7,17 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 public class RenderStatistics {
+    /** True while the current shader binaries contain the statistics path. */
+    public static boolean compiled = false;
+    /** True while per-frame section/quad counters are read back. */
     public static boolean enabled = false;
 
     public static final int[] hierarchicalTraversalCounts = new int[WorldEngine.MAX_LOD_LAYER+1];
     public static final int[] hierarchicalRenderSections = new int[WorldEngine.MAX_LOD_LAYER+1];
     public static final int[] visibleSections = new int[WorldEngine.MAX_LOD_LAYER+1];
     public static final int[] quadCount = new int[WorldEngine.MAX_LOD_LAYER+1];
+    /** LOD0 sections currently covered by compiled vanilla chunks. */
+    public static volatile int lod0CullSections;
 
 
     public static void addDebug(List<String> debug) {

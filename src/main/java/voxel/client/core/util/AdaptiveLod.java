@@ -9,7 +9,7 @@ package voxel.client.core.util;
  * coarsens above it, then walks back down when the frame rate recovers.</p>
  */
 public final class AdaptiveLod {
-    public static final float MIN_SUBDIVISION = 64.0f;
+    public static final float MIN_SUBDIVISION = 32.0f;
     public static final float MAX_SUBDIVISION = 256.0f;
     public static final float STEP_UP = 16.0f;
     public static final float STEP_DOWN = 8.0f;

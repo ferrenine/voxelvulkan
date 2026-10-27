@@ -114,7 +114,11 @@ public class VoxelRenderSystem {
 
             //Wire renderStatistics before any shader compiles below —
             // HAS_STATISTICS/STATISTICS_BUFFER_BINDING are baked in as defines.
-            RenderStatistics.enabled = VoxelConfig.CONFIG.renderStatistics;
+            // Performance metrics also need the visible-section/quad counts, so
+            // a measurement run gets the same per-LOD attribution as F3.
+            RenderStatistics.enabled = VoxelConfig.CONFIG.renderStatistics
+                    || VoxelConfig.CONFIG.performanceMetrics;
+            RenderStatistics.compiled = RenderStatistics.enabled;
             PerformanceMetrics.setEnabled(VoxelConfig.CONFIG.performanceMetrics);
 
             long geometryCapacity = getGeometryBufferSize();
@@ -164,6 +168,7 @@ public class VoxelRenderSystem {
 
             this.boundStore = new ChunkBoundStore();
             this.boundRenderer = new BoundRenderer(this.pipeline);
+            this.traversal.setSectionCoverage(this.boundStore.coverage());
 
             // Start the workers only after every allocation/shader compile
             // succeeded, so a failed reload cannot leave a thread running
@@ -609,6 +614,12 @@ public class VoxelRenderSystem {
         this.renderDistanceTracker.setRenderDistance(renderDistance);
     }
 
+    public void clearGeometryCache() {
+        if (this.nodeManager != null) {
+            this.nodeManager.clearGeometryCache();
+        }
+    }
+
     public Viewport<?> getViewport() {
         return this.viewportSelector.getViewport();
     }
@@ -632,9 +643,15 @@ public class VoxelRenderSystem {
         debug.add("LOD [" + pipeline + "]: SDS " + sds
                 + (sds != baseSds ? " (base " + baseSds + ")" : "")
                 + " | RS " + VoxelConfig.CONFIG.lodRenderScale
-                + " | UC/GC " + usedGeometryMb + "/" + geometryCapMb + " MB");
+                + " | UC/GC " + usedGeometryMb + "/" + geometryCapMb + " MB"
+                + " | LOD0-cull " + this.traversal.getLod0MaskCount());
 
-        TimingStatistics.update();
+        // Perf sessions commit every sampler from PerformanceMetrics.onFrameEnd
+        // (after all passes stop); committing again here would decay the
+        // rolling averages with a zero-length frame.
+        if (!PerformanceMetrics.isEnabled()) {
+            TimingStatistics.update();
+        }
         debug.add(String.format("LOD frame: main %.2f ms | dyn %.2f | post %.2f",
                 TimingStatistics.main.getRolling(),
                 TimingStatistics.dynamic.getRolling(),

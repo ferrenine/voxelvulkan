@@ -166,6 +166,51 @@ class RenderDataFactoryMeshTest {
         }
     }
 
+    @Test
+    void affineLightPlaneHasZeroResidualCells() {
+        int length = 4;
+        int width = 3;
+        long[] keys = new long[length * width];
+        for (int dz = 0; dz < width; dz++) {
+            for (int dx = 0; dx < length; dx++) {
+                keys[dz * length + dx] = packAffineCell(dx, dz, 3, 2, 1, 14, -2, -1, 3, 0, 0);
+            }
+        }
+
+        assertEquals(0, RenderDataFactory.countAffineResidualCells(keys, length, width));
+        long macro = RenderDataFactory.packMacroCornerLightAO(keys, length, width);
+        assertEquals(packCorner(3, 14, 3), (int) (macro & 0x3FFL));
+        assertEquals(packCorner(3 + 3, 14 - 3, 3), (int) ((macro >>> 16) & 0x3FFL));
+        assertEquals(packCorner(3 + 8, 14 - 8, 3), (int) ((macro >>> 32) & 0x3FFL));
+        assertEquals(packCorner(3 + 11, 14 - 11, 3), (int) ((macro >>> 48) & 0x3FFL));
+
+        // Perturbing one inner cell's corner leaves exactly one residual cell.
+        keys[1 * length + 2] ^= 1L;
+        assertEquals(1, RenderDataFactory.countAffineResidualCells(keys, length, width));
+    }
+
+    private static long packAffineCell(
+            int dx, int dz,
+            int sky0, int skyX, int skyZ,
+            int block0, int blockX, int blockZ,
+            int ao0, int aoX, int aoZ) {
+        long packed = 0L;
+        for (int c = 0; c < 4; c++) {
+            int cx = dx + (c >>> 1);
+            int cz = dz + (c & 1);
+            int bits = packCorner(
+                    sky0 + skyX * cx + skyZ * cz,
+                    block0 + blockX * cx + blockZ * cz,
+                    ao0 + aoX * cx + aoZ * cz);
+            packed |= (long) bits << (c << 4);
+        }
+        return packed;
+    }
+
+    private static int packCorner(int sky, int block, int ao) {
+        return (sky & 0xF) | ((block & 0xF) << 4) | ((ao & 0x3) << 8);
+    }
+
     private BuiltSection mesh(int blockId, int... positions) {
         WorldSection section = this.engine.acquire(0, 0, 0, 0);
         try {

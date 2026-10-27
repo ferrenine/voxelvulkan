@@ -118,6 +118,9 @@ public final class PerformanceMetrics {
         }
         long now = System.nanoTime();
         frameOpen = false;
+        // Commit the CPU stopwatches here instead of only from the F3 debug
+        // path, so /vx perf dumps contain a real per-pass breakdown.
+        TimingStatistics.updateSafe();
         sampleGc();
 
         long duration = now - frameStartNanos;
@@ -223,6 +226,8 @@ public final class PerformanceMetrics {
         frameTime.put("one_percent_low", onePercentLow);
         frameTime.put("point_one_percent_low", pointOnePercentLow);
         frameTime.put("frames", frameCount);
+        frameTime.put("window_frames", frameCount);
+        frameTime.put("total_frames", totalFrames);
         frameTime.put("seconds", totalFrameNanos / 1_000_000_000.0);
         frameTime.put("fps_avg", avgMs > 0.0 ? 1_000.0 / avgMs : 0.0);
 
@@ -250,10 +255,13 @@ public final class PerformanceMetrics {
         cpuTiming.put("blit", TimingStatistics.I.getRolling());
 
         Map<String, Object> renderStats = new LinkedHashMap<>();
+        renderStats.put("compiled", RenderStatistics.compiled);
+        renderStats.put("enabled", RenderStatistics.enabled);
         renderStats.put("hierarchical_traversal", Arrays.stream(RenderStatistics.hierarchicalTraversalCounts).boxed().toList());
         renderStats.put("hierarchical_render_sections", Arrays.stream(RenderStatistics.hierarchicalRenderSections).boxed().toList());
         renderStats.put("visible_sections", Arrays.stream(RenderStatistics.visibleSections).boxed().toList());
         renderStats.put("quad_count", Arrays.stream(RenderStatistics.quadCount).boxed().toList());
+        renderStats.put("lod0_cull_sections", RenderStatistics.lod0CullSections);
 
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("generated", LocalDateTime.now().toString());

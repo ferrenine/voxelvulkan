@@ -57,6 +57,22 @@ public class VoxelConfig {
     public float subDivisionSize = 64.0f;
     /** Coarsens distant LOD automatically when the frame rate drops. */
     public boolean adaptiveLOD = true;
+    /**
+     * LOD0 duplicates the vanilla chunks inside the vanilla render distance.
+     * Skip those sections once all eight vanilla children have a compiled mesh
+     * (including empty ones); the vanilla pass already draws the same blocks.
+     */
+    public boolean cullVanillaCoveredLod0 = true;
+    /**
+     * Merges a LOD0 scan rectangle into one quad when all of its cell corners
+     * lie on a single integer affine light/AO plane. Off by default for A/B.
+     */
+    public boolean affineLightMerge = false;
+    /**
+     * Keeps CPU copies of built section meshes. Measured hit rate in real play
+     * was ~0.2% while cloning 1.7-2.2 GB of native buffers, so default off.
+     */
+    public boolean enableGeometryCache = false;
     /** Runtime-only effective value; never written to the config file. */
     public transient float effectiveSubDivisionSize = 64.0f;
 

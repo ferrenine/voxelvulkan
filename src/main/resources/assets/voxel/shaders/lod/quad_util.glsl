@@ -55,6 +55,10 @@ struct QuadData {
     vec2 depthSlope;
     // Lava surface quads: the lightAO word carries per-corner signed Y offsets.
     bool fluidFlow;
+    // Whether this model uses vanilla ambient occlusion / directional shade.
+    // Precomputed in the vertex shader so the fragment does not have to load
+    // the model again just to reconstruct the Beryl vertex colour.
+    bool hasAO;
     // Flow-top lava model: UP-face UVs are re-rotated by the surface gradient.
     bool lavaFlowTile;
     // The quad's face index (0..5, DOWN UP NORTH SOUTH WEST EAST order).
@@ -126,7 +130,9 @@ uvec3 makeRemainingAttributes(const in BlockModel model, const in Quad quad, uin
     bool isShaded = modelIsShaded(model);
     bool hasAO = isShaded;
 
-    vec4 tinting = getLighting(lighting);
+    // Beryl replaces the baked lightmap tint with its own vertex lighting, so
+    // the lightmap fetch and the packed radius are dead work in that path.
+    vec4 tinting = (uBerylLightDir.w > 0.5f) ? vec4(1.0f) : getLighting(lighting);
 
     uint conditionalTinting = 0;
     if (tintColour != uint(-1)) {
@@ -239,6 +245,13 @@ void setupQuad(out QuadData quad, const in Quad rawQuad, uvec2 sPos, bool genera
     quad.depthSlope = ((face & 1u) == 0u) ? faceSlope : -faceSlope;
     quad.fluidFlow = modelIsLava(model);
     quad.lavaFlowTile = modelIsLavaFlow(model);
+    #ifdef TRANSLUCENT
+    // The translucent fragment path always uses the smooth AO/face-shade
+    // ladder (its quad format has no AO flag), so match it here.
+    quad.hasAO = true;
+    #else
+    quad.hasAO = modelIsShaded(model);
+    #endif
     quad.face = face;
     quad.faceSign = ((face & 1u) == 1u) ? 1.0f : -1.0f;
 

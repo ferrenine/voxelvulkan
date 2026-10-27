@@ -59,6 +59,15 @@
   "voxel.option.adaptive_lod": "Adaptive LOD",
   "voxel.option.adaptive_lod.tooltip": "When the frame rate drops (for example while looking across a large vista), temporarily coarsen the far LOD above the configured sub-division size. It returns to the configured value when the view stabilises; this is a performance/quality trade-off and can cause visible LOD changes.",
 
+  "voxel.option.cull_vanilla_lod0": "Cull LOD0 Under Vanilla Chunks",
+  "voxel.option.cull_vanilla_lod0.tooltip": "Skip LOD0 sections whose eight vanilla child sections are already compiled. The vanilla pass draws the same blocks, so this removes duplicate near-field geometry without changing the image. Disable it if holes appear while chunks are still loading.",
+
+  "voxel.option.affine_light_merge": "Affine Light Merge (Experimental)",
+  "voxel.option.affine_light_merge.tooltip": "Merge a coplanar LOD0 rectangle into one quad when all of its cell corners lie on a single affine light/AO plane. Measured on a real build workload: only ~0.06% of partition quads were exactly affine, so this is off by default and not recommended for performance.",
+
+  "voxel.option.geometry_cache": "CPU Geometry Cache",
+  "voxel.option.geometry_cache.tooltip": "Keep a CPU copy of built section meshes. Off by default because the measured hit rate is under 0.3% while cloning gigabytes of native buffers.",
+
   "voxel.option.lod_scale": "LOD Resolution Scale",
   "voxel.option.lod_scale.tooltip": "Internal render resolution of the distant LOD pass as a percentage of the window. Lower values save a lot of GPU time but soften far terrain.",
 

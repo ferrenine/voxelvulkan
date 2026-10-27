@@ -90,19 +90,33 @@ public abstract class MixinVkRenderSection {
 
     @Inject(method = "setOrigin", at = @At("HEAD"))
     private void voxel$onSetOrigin(int x, int y, int z, CallbackInfo ci) {
-        if (this.voxel$tracked) {
+        boolean wasTracked = this.voxel$tracked;
+        if (wasTracked) {
             this.voxel$tracked = false;
             this.voxel$ingestSection();
-            var system = IGetVoxelRenderSystem.getNullable();
-            if (system != null) {
-                system.boundStore.removeSection(this.voxel$sectionPos());
+        }
+        var system = IGetVoxelRenderSystem.getNullable();
+        if (system != null) {
+            long pos = this.voxel$sectionPos();
+            if (wasTracked) {
+                system.boundStore.removeSection(pos);
             }
+            // Empty-but-compiled sections must leave the coverage set too.
+            system.boundStore.markCompiled(pos, false);
         }
     }
 
     @Inject(method = "setCompletelyEmpty", at = @At("HEAD"))
     private void voxel$onSetCompletelyEmpty(boolean empty, CallbackInfo ci) {
-        boolean shouldTrack = this.isCompiled() && !empty;
+        boolean compiled = this.isCompiled();
+        boolean shouldTrack = compiled && !empty;
+        var system = IGetVoxelRenderSystem.getNullable();
+        long pos = this.voxel$sectionPos();
+        if (system != null) {
+            // Empty sections still count as covered: vanilla has no geometry
+            // there, so a LOD0 section over them is redundant as well.
+            system.boundStore.markCompiled(pos, compiled);
+        }
         if (shouldTrack == this.voxel$tracked) {
             return;
         }
@@ -110,9 +124,7 @@ public abstract class MixinVkRenderSection {
         if (shouldTrack) {
             this.voxel$ingestSection();
         }
-        var system = IGetVoxelRenderSystem.getNullable();
         if (system != null) {
-            long pos = this.voxel$sectionPos();
             if (shouldTrack) {
                 system.boundStore.addSection(pos);
             } else {

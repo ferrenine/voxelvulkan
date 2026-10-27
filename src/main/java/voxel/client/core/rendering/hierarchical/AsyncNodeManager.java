@@ -5,6 +5,7 @@ import it.unimi.dsi.fastutil.ints.IntConsumer;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import voxel.client.TimingStatistics;
+import voxel.client.config.VoxelConfig;
 import voxel.client.core.vk.VkBuffer;
 import voxel.client.core.vk.shader.AutoBindingShader;
 import voxel.client.core.vk.shader.Shader;
@@ -113,6 +114,10 @@ public class AsyncNodeManager {
 
         this.router = new SectionUpdateRouter();
         this.router.setCallbacks(pos->{//On initial render gen, try get from geometry cache
+            if (!VoxelConfig.CONFIG.enableGeometryCache) {
+                renderService.enqueueTask(pos);
+                return;
+            }
             var cachedGeometry = this.geometryCache.remove(pos);
             PerformanceCounters.recordGeometryCache(cachedGeometry != null);
             if (cachedGeometry != null) {//Use the cached geometry
@@ -736,10 +741,13 @@ public class AsyncNodeManager {
             }
             //CPU-side copy so future requests for this position skip remeshing;
             // invalidated via worldEvent() when the section (or a face neighbour)
-            // changes, and bounded by LRU size.
-            BuiltSection cachedCopy = geometry.clone();
-            PerformanceCounters.recordGeometryClone(builtSectionBytes(cachedCopy));
-            this.geometryCache.put(cachedCopy);
+            // changes, and bounded by LRU size. Disabled by default: the measured
+            // hit rate in real play was ~0.2% while cloning gigabytes of buffers.
+            if (VoxelConfig.CONFIG.enableGeometryCache) {
+                BuiltSection cachedCopy = geometry.clone();
+                PerformanceCounters.recordGeometryClone(builtSectionBytes(cachedCopy));
+                this.geometryCache.put(cachedCopy);
+            }
             this.geometryUpdateQueue.add(geometry);
             this.addWork();
         }
@@ -870,6 +878,10 @@ public class AsyncNodeManager {
 
     public boolean hasWork() {
         return this.workCounter.get()!=0 || RESULT_HANDLE.get(this) != null;
+    }
+
+    public void clearGeometryCache() {
+        this.geometryCache.free();
     }
 
     public void worldEvent(WorldSection section, int flags, int neighborMask) {

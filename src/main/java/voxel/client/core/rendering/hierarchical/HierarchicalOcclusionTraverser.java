@@ -1,6 +1,7 @@
 package voxel.client.core.rendering.hierarchical;
 
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
+import net.minecraft.client.Minecraft;
 import voxel.client.RenderStatistics;
 import voxel.client.config.VoxelConfig;
 import voxel.client.core.vk.Capabilities;
@@ -9,6 +10,7 @@ import voxel.client.core.vk.shader.AutoBindingShader;
 import voxel.client.core.vk.shader.Shader;
 import voxel.client.core.vk.shader.ShaderType;
 import voxel.client.core.rendering.Viewport;
+import voxel.client.core.rendering.bounding.VanillaSectionCoverage;
 import voxel.client.core.rendering.building.RenderGenerationService;
 import voxel.client.core.rendering.util.DownloadStream;
 import voxel.client.core.rendering.util.PrintfDebugUtil;
@@ -18,6 +20,8 @@ import voxel.common.Logger;
 import voxel.common.util.MemoryBuffer;
 import voxel.common.world.WorldEngine;
 import org.lwjgl.system.MemoryUtil;
+
+import java.util.Arrays;
 
 import static voxel.client.core.rendering.util.PrintfDebugUtil.PRINTF_processor;
 
@@ -41,6 +45,16 @@ public class HierarchicalOcclusionTraverser {
     private final VkBuffer nodeBuffer;
     private final VkBuffer uniformBuffer = new VkBuffer(1024).zero();
     private final VkBuffer statisticsBuffer = new VkBuffer(1024).zero();
+    private final VkBuffer lod0MaskBuffer = new VkBuffer(LOD0_MASK_INTS * 4L).zero();
+    private final int[] lod0MaskScratch = new int[LOD0_MASK_INTS];
+
+    private VanillaSectionCoverage sectionCoverage;
+    private int lod0MaskOriginX;
+    private int lod0MaskOriginY;
+    private int lod0MaskOriginZ;
+    private long lod0MaskRevision = Long.MIN_VALUE;
+    private boolean lod0MaskEnabled;
+    private int lod0MaskCount;
 
 
     private int topNodeCount;
@@ -64,6 +78,12 @@ public class HierarchicalOcclusionTraverser {
     private static final int NODE_QUEUE_SINK_BINDING = BINDING_COUNTER++;
     private static final int RENDER_TRACKER_BINDING = BINDING_COUNTER++;
     private static final int STATISTICS_BUFFER_BINDING = BINDING_COUNTER++;
+    private static final int LOD0_MASK_BINDING = BINDING_COUNTER++;
+
+    /** 16^3 LOD0-section bits, centered on the camera section. */
+    private static final int LOD0_MASK_EDGE = 16;
+    private static final int LOD0_MASK_BITS = LOD0_MASK_EDGE * LOD0_MASK_EDGE * LOD0_MASK_EDGE;
+    private static final int LOD0_MASK_INTS = LOD0_MASK_BITS / 32;
 
     private final AutoBindingShader traversal = Shader.makeAuto(PRINTF_processor)
             .defineIf("DEBUG", HIERARCHICAL_SHADER_DEBUG)
@@ -88,6 +108,7 @@ public class HierarchicalOcclusionTraverser {
 
             .defineIf("HAS_STATISTICS", RenderStatistics.enabled)
             .defineIf("STATISTICS_BUFFER_BINDING", RenderStatistics.enabled, STATISTICS_BUFFER_BINDING)
+            .define("LOD0_MASK_BINDING", LOD0_MASK_BINDING)
             .defineIf("USE_SUBGROUPS", Capabilities.INSTANCE.subgroup)
 
             .add(ShaderType.COMPUTE, "voxel:lod/hierarchical/traversal_dev.comp")
@@ -107,6 +128,7 @@ public class HierarchicalOcclusionTraverser {
                 .ssbo("NODE_DATA_BINDING", this.nodeBuffer)
                 .ssbo("NODE_QUEUE_META_BINDING", this.queueMetaBuffer)
                 .ssbo("RENDER_TRACKER_BINDING", this.nodeCleaner.visibilityBuffer)
+                .ssbo("LOD0_MASK_BINDING", this.lod0MaskBuffer)
                 .ssboIf("STATISTICS_BUFFER_BINDING", this.statisticsBuffer);
 
         this.topNode2idxMapping.defaultReturnValue(-1);
@@ -160,7 +182,104 @@ public class HierarchicalOcclusionTraverser {
         }
     }
 
+    public void setSectionCoverage(VanillaSectionCoverage coverage) {
+        this.sectionCoverage = coverage;
+        this.lod0MaskRevision = Long.MIN_VALUE;
+    }
+
+    /**
+     * Builds a 16x16x16 bitmask of LOD0 sections whose eight vanilla children
+     * are compiled. The traversal reads it and drops those duplicate sections
+     * before frustum/HiZ work and before requesting a LOD0 mesh.
+     */
+    private void updateLod0Mask(Viewport<?> viewport) {
+        boolean enabled = VoxelConfig.CONFIG.cullVanillaCoveredLod0 && this.sectionCoverage != null;
+        int originX = viewport.section.x - LOD0_MASK_EDGE / 2;
+        int originY = viewport.section.y - LOD0_MASK_EDGE / 2;
+        int originZ = viewport.section.z - LOD0_MASK_EDGE / 2;
+        long revision = this.sectionCoverage != null ? this.sectionCoverage.revision() : 0L;
+
+        if (enabled == this.lod0MaskEnabled
+                && originX == this.lod0MaskOriginX
+                && originY == this.lod0MaskOriginY
+                && originZ == this.lod0MaskOriginZ
+                && revision == this.lod0MaskRevision) {
+            return;
+        }
+
+        this.lod0MaskEnabled = enabled;
+        this.lod0MaskOriginX = originX;
+        this.lod0MaskOriginY = originY;
+        this.lod0MaskOriginZ = originZ;
+        this.lod0MaskRevision = revision;
+        this.lod0MaskCount = 0;
+        RenderStatistics.lod0CullSections = 0;
+
+        if (!enabled) {
+            return;
+        }
+
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft == null || minecraft.options == null) {
+            this.lod0MaskEnabled = false;
+            return;
+        }
+
+        // A LOD0 section is 32 blocks wide, so require its farthest corner to
+        // be inside the vanilla render square minus one chunk. This keeps a
+        // safety ring at the vanilla/LOD seam and avoids skipping sections that
+        // are merely still cached outside the current render distance.
+        double renderDistance = minecraft.options.getEffectiveRenderDistance() * 16.0 - 16.0;
+        if (renderDistance <= 0.0) {
+            this.lod0MaskEnabled = false;
+            return;
+        }
+        double renderDistanceSq = renderDistance * renderDistance;
+
+        Arrays.fill(this.lod0MaskScratch, 0);
+        for (int lz = 0; lz < LOD0_MASK_EDGE; lz++) {
+            int worldZ = originZ + lz;
+            double minZ = (double) worldZ * 32.0;
+            double maxAbsZ = Math.max(Math.abs(minZ - viewport.cameraZ),
+                    Math.abs(minZ + 32.0 - viewport.cameraZ));
+            if (maxAbsZ > renderDistance) {
+                continue;
+            }
+            for (int lx = 0; lx < LOD0_MASK_EDGE; lx++) {
+                int worldX = originX + lx;
+                double minX = (double) worldX * 32.0;
+                double maxAbsX = Math.max(Math.abs(minX - viewport.cameraX),
+                        Math.abs(minX + 32.0 - viewport.cameraX));
+                // Use the farthest corner in 2D (circle, not square) so this
+                // stays conservative if the vanilla renderer culls by radius.
+                if (maxAbsX * maxAbsX + maxAbsZ * maxAbsZ > renderDistanceSq) {
+                    continue;
+                }
+                for (int ly = 0; ly < LOD0_MASK_EDGE; ly++) {
+                    int worldY = originY + ly;
+                    if (!this.sectionCoverage.coversLod0Section(worldX, worldY, worldZ)) {
+                        continue;
+                    }
+                    int bit = lx + ly * LOD0_MASK_EDGE + lz * LOD0_MASK_EDGE * LOD0_MASK_EDGE;
+                    this.lod0MaskScratch[bit >>> 5] |= 1 << (bit & 31);
+                    this.lod0MaskCount++;
+                }
+            }
+        }
+
+        long ptr = UploadStream.INSTANCE.upload(this.lod0MaskBuffer, 0, this.lod0MaskBuffer.size());
+        for (int i = 0; i < LOD0_MASK_INTS; i++) {
+            MemoryUtil.memPutInt(ptr + (long) i * 4L, this.lod0MaskScratch[i]);
+        }
+        RenderStatistics.lod0CullSections = this.lod0MaskCount;
+    }
+
+    public int getLod0MaskCount() {
+        return this.lod0MaskCount;
+    }
+
     private void uploadUniform(Viewport<?> viewport) {
+        this.updateLod0Mask(viewport);
         long ptr = UploadStream.INSTANCE.upload(this.uniformBuffer, 0, 1024);
 
         viewport.MVP.getToAddress(ptr); ptr += 4*4*4;
@@ -197,6 +316,14 @@ public class HierarchicalOcclusionTraverser {
             final int requestSize = (int) Math.ceil(iFillness * MAX_REQUEST_QUEUE_SIZE);
             MemoryUtil.memPutInt(ptr, Math.max(0, Math.min(MAX_REQUEST_QUEUE_SIZE, requestSize)));ptr += 4;
         }
+
+        // std140 aligns ivec4 to 16 bytes: requestQueueSize ends at 204, so the
+        // LOD0 mask origin starts at 208. Keep this in sync with traversal_dev.comp.
+        ptr += 4;
+        MemoryUtil.memPutInt(ptr, this.lod0MaskOriginX); ptr += 4;
+        MemoryUtil.memPutInt(ptr, this.lod0MaskOriginY); ptr += 4;
+        MemoryUtil.memPutInt(ptr, this.lod0MaskOriginZ); ptr += 4;
+        MemoryUtil.memPutInt(ptr, this.lod0MaskEnabled ? 1 : 0); ptr += 4;
     }
 
     private void bindings(Viewport<?> viewport) {
@@ -322,6 +449,7 @@ public class HierarchicalOcclusionTraverser {
         this.nodeBuffer.free();
         this.uniformBuffer.free();
         this.statisticsBuffer.free();
+        this.lod0MaskBuffer.free();
         this.queueMetaBuffer.free();
         this.topNodeIds.free();
         this.scratchQueueA.free();

@@ -25,6 +25,12 @@ layout(location = 2) out vec3 vRelPos;
 layout(location = 3) out float vSky;
 layout(location = 4) out float vBlock;
 layout(location = 5) out float vAO;
+// Beryl's terrain.vsh computes pow(tint * AO * faceShade, 2.2) per vertex.
+// These carry that split factor into the fragment so the common far-field
+// path does not pay a vec3 pow per pixel. vTintPow is the flat
+// pow(tint * faceShade, 2.2); -1 selects the per-pixel partial-tint fallback.
+layout(location = 6) out flat vec3 vTintPow;
+layout(location = 7) out float vAOPow;
 
 layout(std430, binding = LIGHT_AO_BINDING) readonly buffer LightAOData {
     //per corner: sky(4)|block(4)|AO(2)|pad(6); for lava quads the high byte of
@@ -34,7 +40,7 @@ layout(std430, binding = LIGHT_AO_BINDING) readonly buffer LightAOData {
 };
 
 #ifdef DEBUG_RENDER
-layout(location = 7) out flat uint quadDebug;
+layout(location = 8) out flat uint quadDebug;
 #endif
 
 #ifdef SHADOW_PASS
@@ -63,6 +69,10 @@ bool shadowCasterSectionOutside(uvec2 sPos) {
 #endif
 
 vec2 taaShift();
+
+vec4 unpackRGBA(uint colour) {
+    return vec4((uvec4(colour)>>uvec4(24,16,8,0))&uvec4(0xFF))/255.0;
+}
 
 //TODO: add a mechanism so that some quads can ignore backface culling
 // this would help alot with stuff like crops as they would look kinda weird i think,
@@ -144,6 +154,32 @@ void main() {
     vBlock = quad.fluidFlow ? 15.0f : float((lightAOBits >> 4) & 0xFu);
     vAO = quad.fluidFlow ? 1.0f : float((lightAOBits >> 8) & 3u) / 3.0f;
 
+    // Beryl shades with pow(tint * AO * faceShade, 2.2) computed in its vertex
+    // shader. Do the same split here: one pow per vertex for AO and one flat
+    // pow per quad for tint*faceShade, instead of three pows on every covered
+    // pixel. The tintingState==1 partial-tint path needs a per-pixel texture
+    // test, so it keeps the old per-pixel formula via the -1 sentinel.
+    vAOPow = 1.0f;
+    vTintPow = vec3(1.0f);
+    #ifndef SHADOW_PASS
+    if (uBerylLightDir.w > 0.5f) {
+        float aoFactor = quad.hasAO ? mix(0.4f, 1.0f, vAO) : 1.0f;
+        vAOPow = pow(max(aoFactor, 0.0f), 2.2f);
+
+        // The provoking vertex of both triangles is vertex 1, which is also
+        // where setupQuad builds the flat per-quad attributes.
+        if ((gl_VertexID & 3u) == 1u) {
+            uint tinting = (interData.x >> 2u) & 3u;
+            if (tinting == 1u) {
+                vTintPow = vec3(-1.0f);
+            } else {
+                vec4 tint = (tinting == 2u) ? unpackRGBA(interData.z).yzwx : vec4(1.0f);
+                float faceShade = computeDirectionalFaceTint(quad.hasAO, (interData.w >> 8u) & 7u);
+                vTintPow = pow(max(tint.rgb * faceShade, vec3(0.0f)), vec3(2.2f));
+            }
+        }
+    }
+    #endif
 
     #ifdef DEBUG_RENDER
     quadDebug = uint(gl_VertexID)>>(2+5);

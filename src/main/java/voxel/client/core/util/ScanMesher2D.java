@@ -3,6 +3,12 @@ package voxel.client.core.util;
 /**
  * 32x32 2D bitmask-driven greedy surface mesher for merging coplanar voxel faces
  * into up to 16x16 quads across scanlines.
+ *
+ * <p>The 16-cell cap comes from the two 4-bit size fields in the packed quad
+ * format, not from the scan algorithm. Raising it to 32 needs a wider quad
+ * encoding (or a side buffer); at LOD &gt; 0 one 16x16 cell already covers
+ * 1024 blocks, so the extra merge range mostly helps huge uniform LOD0
+ * planes.</p>
  */
 public abstract class ScanMesher2D {
 

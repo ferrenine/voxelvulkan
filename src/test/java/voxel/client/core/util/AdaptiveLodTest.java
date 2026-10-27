@@ -27,6 +27,10 @@ class AdaptiveLodTest {
     void configuredValueIsTheQualityFloor() {
         assertEquals(200.0f, AdaptiveLod.step(96.0f, 200.0f, 80, true));
         assertEquals(216.0f, AdaptiveLod.step(200.0f, 200.0f, 40, true));
-        assertEquals(64.0f, AdaptiveLod.step(32.0f, 32.0f, 80, true));
+        // A user who chose the minimum (32) keeps it when the frame rate is
+        // healthy; adaptive LOD must never silently apply a finer/coarser
+        // value than requested just because the controller has a floor.
+        assertEquals(32.0f, AdaptiveLod.step(32.0f, 32.0f, 80, true));
+        assertEquals(48.0f, AdaptiveLod.step(32.0f, 32.0f, 40, true));
     }
 }

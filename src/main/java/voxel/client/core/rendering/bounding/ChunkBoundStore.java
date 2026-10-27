@@ -22,9 +22,19 @@ public class ChunkBoundStore implements IBoundStore {
 
     private final LongOpenHashSet addQueue = new LongOpenHashSet();
     private final LongOpenHashSet remQueue = new LongOpenHashSet();
+    private final VanillaSectionCoverage coverage = new VanillaSectionCoverage();
 
     public ChunkBoundStore() {
         this.chunk2idx.defaultReturnValue(-1);
+    }
+
+    /** Compiled vanilla sections, including empty ones, for LOD0 coverage tests. */
+    public VanillaSectionCoverage coverage() {
+        return this.coverage;
+    }
+
+    public void markCompiled(long sectionPos, boolean compiled) {
+        this.coverage.markCompiled(sectionPos, compiled);
     }
 
     public void addSection(long pos) {
@@ -128,6 +138,7 @@ public class ChunkBoundStore implements IBoundStore {
         this.chunk2idx.clear();
         this.addQueue.clear();
         this.remQueue.clear();
+        this.coverage.clear();
     }
 
     @Override
