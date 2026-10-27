@@ -131,10 +131,15 @@ public class RenderDataFactory {
         }
 
         /**
-         * Mirrors the fully-connected case of LambdaBetterGrass's side pass:
-         * the visible face has air in front and the block diagonally below the
-         * face is the same state. Section borders deliberately fall back to
-         * the vanilla model instead of reaching into a neighbour snapshot.
+         * Mirrors the fully-connected case of LambdaBetterGrass's side pass.
+         * LBG's {@code canFullyConnect} checks the block diagonally below the
+         * face and accepts any non-solid-render block in front (tall grass,
+         * flowers, snow layers, leaves, water...), not only air. This mesher
+         * only emits a face when the block in front is non-opaque, so the
+         * front test is already covered here; requiring real air left every
+         * grass side behind vegetation with the vanilla dirt texture. The
+         * diagonal-below sample also falls back to the neighbour boundary
+         * snapshot at section edges.
          */
         private boolean isLBGConnected(int face, int qx, int qz, int auxPos) {
             if (RenderDataFactory.this.lodLevel != 0) {
@@ -170,13 +175,17 @@ public class RenderDataFactory {
                 ax += dir;
             }
 
-            // LBG only rewrites side quads; the quad is visible because the
-            // mesher found air (or a non-opaque block) in front. Keep the
-            // selection conservative and only claim real air here.
-            if (rawBlockAt(ax, ay, az) != 0) {
-                return false;
+            // The quad exists, so the block in front is already known to be
+            // non-opaque (LBG's isAir() || !isSolidRender front test). The
+            // diagonal-below cell can sit just across a section border; use the
+            // neighbour boundary snapshot there instead of falling back to the
+            // vanilla side for a one-block stripe at every section edge.
+            int below = rawBlockAt(ax, ay - 1, az);
+            if (below < 0) {
+                long neighbor = getNeighborRawBlock(ax, ay - 1, az);
+                below = neighbor == 0L ? -1 : Mapper.getBlockId(neighbor);
             }
-            return rawBlockAt(ax, ay - 1, az) == target;
+            return below == target;
         }
 
         //Note x, z are in top right

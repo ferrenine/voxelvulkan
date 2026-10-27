@@ -1245,6 +1245,8 @@ public class ModelFactory {
 
         MipGen.putTextures(result.hasDarkenedTextures, textureData, upload.texture);
         this.uploadResults.add(upload);
+        Logger.info("LambdaBetterGrass LOD side model " + variantModelId + " for "
+                + result.blockState + " (base " + baseModelId + ")");
     }
 
     private static final class BiomeUploadResult implements ResultUploader {
