@@ -47,55 +47,6 @@ The build product is located at `build/libs/voxel-*.jar`. The prebuilt
 `libs/` jars are development-only dependencies and are not shipped inside the
 mod jar.
 
-## Performance Metrics
-
-The renderer can record a frame-time distribution and the counters needed to
-diagnose hitches:
-
-```text
-/vx perf start
-/vx perf stop
-/vx perf reset
-/vx perf dump
-```
-
-`dump` writes `voxel-perf/<timestamp>.json` and `.csv` under the game
-directory. The JSON includes P50/P95/P99/P99.9 frame times, 1% / 0.1% lows,
-spike reasons (`DEVICE_WAIT`, `UPLOAD_OVERFLOW`, `MESH_BURST`,
-`PIPELINE_CREATE`, `DISK_READ`, `DISK_WRITE`, `HEAP_GROW`, `GC_PAUSE`),
-barrier/transfer counters, mesh and geometry queues, native/VRAM usage and GC
-time. The CSV contains one row per frame with its spike mask.
-
-The same session can be enabled from the VulkanMod settings page
-(`Diagnostics → Performance Metrics`). Recording is off by default; the hot
-path is one ring-buffer write per frame.
-
-## Storage and Cache
-
-LOD data is stored per world:
-
-- Singleplayer: `<world>/voxel/`
-- Multiplayer: `.minecraft/.voxel/saves/<server-address>/`
-
-Deleting that directory is safe; it is rebuilt from the world the next time
-the area is loaded. The default backend is RocksDB with ZSTD compression.
-
-## Known Limitations
-
-- Server-side LOD streaming is not implemented in this client-only build. The
-  client registers the protocol channels so a companion server mod can be
-  added later, but no payloads are sent or accepted without one.
-- Translucent blocks (for example stained glass) can show seams at section
-  borders in some configurations.
-- Beryl integration targets `0.2.1-alpha`; other Beryl builds may expose
-  different internals and are not tested.
-- SSAO is currently disabled; the pass is kept for the colour copy used by the
-  final blit and SSR.
-- Temporal antialiasing is not implemented yet, so distant water and thin
-  geometry can shimmer while moving.
-- The model atlas has a 65,535-ID budget. Vanilla and normal modpacks fit, but
-  extremely large block-state sets can exhaust it.
-
 ## Acknowledgements
 
 Special thanks to **ANOUSIT Sysouphakhone (LING)** and **Cortex (MCRcortex)** for their research and implementation in the field of voxel LOD. This project is an independent continuation of the maintenance based on the Vulkan/Fabric port of **LING Horizons**, maintained and released by **ferrenine**.
