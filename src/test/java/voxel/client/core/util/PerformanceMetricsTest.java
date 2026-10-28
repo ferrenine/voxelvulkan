@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PerformanceMetricsTest {
@@ -34,7 +35,18 @@ class PerformanceMetricsTest {
         assertTrue(Files.exists(result.json()));
         assertTrue(Files.exists(result.csv()));
         assertTrue(Files.readString(result.json()).contains("\"frame_time_ms\""));
+        assertTrue(Files.readString(result.json()).contains("\"stw_collection_count\""));
         assertTrue(Files.readString(result.csv()).startsWith("frame,frame_ms,spike_mask,spikes"));
         assertTrue(result.frames() > 0);
+    }
+
+    @Test
+    void concurrentCollectorsAreNotReportedAsPauses() {
+        assertTrue(PerformanceMetrics.isStopTheWorldCollector("G1 Young Generation"));
+        assertTrue(PerformanceMetrics.isStopTheWorldCollector("G1 Old Generation"));
+        assertTrue(PerformanceMetrics.isStopTheWorldCollector("ZGC Pauses"));
+        assertFalse(PerformanceMetrics.isStopTheWorldCollector("G1 Concurrent GC"));
+        assertFalse(PerformanceMetrics.isStopTheWorldCollector("ZGC Cycles"));
+        assertFalse(PerformanceMetrics.isStopTheWorldCollector("Shenandoah Cycles"));
     }
 }

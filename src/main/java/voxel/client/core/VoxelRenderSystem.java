@@ -116,9 +116,13 @@ public class VoxelRenderSystem {
             // HAS_STATISTICS/STATISTICS_BUFFER_BINDING are baked in as defines.
             // Performance metrics also need the visible-section/quad counts, so
             // a measurement run gets the same per-LOD attribution as F3.
-            RenderStatistics.enabled = VoxelConfig.CONFIG.renderStatistics
+            // Compile the counters in when either mode may capture, but keep
+            // the per-frame readback and periodic [RenderStats] log off until
+            // /vx perf start (or render_statistics) explicitly asks for them.
+            // This removes the diagnostic overhead from normal play.
+            RenderStatistics.compiled = VoxelConfig.CONFIG.renderStatistics
                     || VoxelConfig.CONFIG.performanceMetrics;
-            RenderStatistics.compiled = RenderStatistics.enabled;
+            RenderStatistics.enabled = VoxelConfig.CONFIG.renderStatistics;
             PerformanceMetrics.setEnabled(VoxelConfig.CONFIG.performanceMetrics);
 
             long geometryCapacity = getGeometryBufferSize();
@@ -370,7 +374,10 @@ public class VoxelRenderSystem {
             if (this.lastOpaqueStartNanos != 0L) {
                 long frameNanos = now - this.lastOpaqueStartNanos;
                 this.recordFrameTime(frameNanos);
-                if (VoxelConfig.CONFIG.renderStatistics
+                // RenderStatistics.enabled is also true during /vx perf
+                // capture (performanceMetrics), so a measurement run gets the
+                // pre/shadow/vanilla/voxel/post split for every long frame.
+                if (RenderStatistics.enabled
                         && frameNanos > 20_000_000L && now - this.lastSpikeLogNanos > 1_000_000_000L) {
                     this.lastSpikeLogNanos = now;
                     Logger.warn(String.format(java.util.Locale.ROOT,
@@ -430,7 +437,7 @@ public class VoxelRenderSystem {
         if (this.lastOpaqueStartNanos != 0L) {
             long opaqueDuration = opaqueEnd - this.lastOpaqueStartNanos;
             this.lastOpaqueDurationNanos = opaqueDuration;
-            if (VoxelConfig.CONFIG.renderStatistics
+            if (RenderStatistics.enabled
                     && opaqueDuration > 20_000_000L && opaqueEnd - this.lastSpikeLogNanos > 1_000_000_000L) {
                 this.lastSpikeLogNanos = opaqueEnd;
                 Logger.warn(String.format(java.util.Locale.ROOT,

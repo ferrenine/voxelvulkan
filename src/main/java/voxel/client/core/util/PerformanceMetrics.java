@@ -38,6 +38,16 @@ public final class PerformanceMetrics {
     private static final long GC_SPIKE_THRESHOLD_NANOS = 4_000_000L;
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final List<GarbageCollectorMXBean> GC_BEANS = ManagementFactory.getGarbageCollectorMXBeans();
+    // G1 reports a "G1 Concurrent GC" bean and ZGC/Shenandoah report "Cycles"
+    // beans. Their collection time is concurrent cycle time, not a
+    // stop-the-world pause, so including it in the GC_PAUSE spike counter
+    // attributes frame time to a pause that never blocked the render thread.
+    private static final List<GarbageCollectorMXBean> STW_GC_BEANS = GC_BEANS.stream()
+            .filter(bean -> isStopTheWorldCollector(bean.getName()))
+            .toList();
+    private static final List<GarbageCollectorMXBean> CONCURRENT_GC_BEANS = GC_BEANS.stream()
+            .filter(bean -> !isStopTheWorldCollector(bean.getName()))
+            .toList();
 
     private static final long[] frameNanos = new long[FRAME_CAPACITY];
     private static final int[] frameSpikes = new int[FRAME_CAPACITY];
@@ -155,9 +165,34 @@ public final class PerformanceMetrics {
         lastGcTimeMillis = gcTime;
     }
 
+    /**
+     * True for collectors whose reported collection time is a pause of the
+     * application threads. Concurrent cycle beans (G1 "Concurrent GC",
+     * ZGC/Shenandoah "Cycles") are excluded so GC_PAUSE reflects real stalls.
+     */
+    static boolean isStopTheWorldCollector(String name) {
+        return !name.contains("Concurrent") && !name.contains("Cycles");
+    }
+
     private static long currentGcTimeMillis() {
+        return collectionTimeMillis(STW_GC_BEANS);
+    }
+
+    private static long currentGcCount() {
+        return collectionCount(STW_GC_BEANS);
+    }
+
+    private static long concurrentGcTimeMillis() {
+        return collectionTimeMillis(CONCURRENT_GC_BEANS);
+    }
+
+    private static long concurrentGcCount() {
+        return collectionCount(CONCURRENT_GC_BEANS);
+    }
+
+    private static long collectionTimeMillis(List<GarbageCollectorMXBean> beans) {
         long total = 0L;
-        for (GarbageCollectorMXBean bean : GC_BEANS) {
+        for (GarbageCollectorMXBean bean : beans) {
             long time = bean.getCollectionTime();
             if (time > 0L) {
                 total += time;
@@ -166,9 +201,9 @@ public final class PerformanceMetrics {
         return total;
     }
 
-    private static long currentGcCount() {
+    private static long collectionCount(List<GarbageCollectorMXBean> beans) {
         long total = 0L;
-        for (GarbageCollectorMXBean bean : GC_BEANS) {
+        for (GarbageCollectorMXBean bean : beans) {
             long count = bean.getCollectionCount();
             if (count > 0L) {
                 total += count;
@@ -240,8 +275,15 @@ public final class PerformanceMetrics {
         memory.put("vulkan_texture_bytes", VkTexture.getEstimatedTotalSize());
 
         Map<String, Object> gc = new LinkedHashMap<>();
+        // collection_* now counts stop-the-world collections only. The
+        // concurrent_* pair is reported separately so a GC log can be read
+        // without mistaking G1's concurrent cycle for a frame stall.
         gc.put("collection_count", currentGcCount());
         gc.put("collection_time_ms", currentGcTimeMillis());
+        gc.put("stw_collection_count", currentGcCount());
+        gc.put("stw_collection_time_ms", currentGcTimeMillis());
+        gc.put("concurrent_cycle_count", concurrentGcCount());
+        gc.put("concurrent_cycle_time_ms", concurrentGcTimeMillis());
 
         Map<String, Object> cpuTiming = new LinkedHashMap<>();
         cpuTiming.put("all", TimingStatistics.all.getRolling());
