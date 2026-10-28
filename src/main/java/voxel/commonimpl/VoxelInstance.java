@@ -142,22 +142,23 @@ public abstract class VoxelInstance {
             return world;
         }
         long stamp = this.activeWorldLock.writeLock();
+        try {
+            if (!this.isRunning) {
+                Logger.error("Tried getting world object on Voxel instance but its not running");
+                return null;
+            }
 
-        if (!this.isRunning) {
-            Logger.error("Tried getting world object on Voxel instance but its not running");
-            return null;
+            world = this.activeWorlds.get(identifier);
+            if (world == null) {
+                //Create world here
+                world = this.createWorld(identifier);
+            }
+            world.markActive();
+
+            if (incrementRef) world.acquireRef();
+        } finally {
+            this.activeWorldLock.unlockWrite(stamp);
         }
-
-        world = this.activeWorlds.get(identifier);
-        if (world == null) {
-            //Create world here
-            world = this.createWorld(identifier);
-        }
-        world.markActive();
-
-        if (incrementRef) world.acquireRef();
-
-        this.activeWorldLock.unlockWrite(stamp);
         identifier.cachedEngineObject = new WeakReference<>(world);
         return world;
     }
@@ -209,8 +210,16 @@ public abstract class VoxelInstance {
 
     public void addDebug(List<String> debug) {
         debug.add("MemoryBuffer, Count/Size (mb): " + MemoryBuffer.getCount() + "/" + (MemoryBuffer.getTotalSize()/1_000_000));
-        //TODO: fixme, doing this.activeWorlds.values() is not thread safe
-        debug.add("I/S/AWSC: " + this.ingestService.getTaskCount() + "/" + this.savingService.getTaskCount() + "/[" + this.activeWorlds.values().stream().map(a->""+a.getActiveSectionCount()).collect(Collectors.joining(", ")) + "]");//Active world section count
+        String activeSectionCounts;
+        long stamp = this.activeWorldLock.readLock();
+        try {
+            activeSectionCounts = this.activeWorlds.values().stream()
+                    .map(a -> "" + a.getActiveSectionCount())
+                    .collect(Collectors.joining(", "));
+        } finally {
+            this.activeWorldLock.unlockRead(stamp);
+        }
+        debug.add("I/S/AWSC: " + this.ingestService.getTaskCount() + "/" + this.savingService.getTaskCount() + "/[" + activeSectionCounts + "]");//Active world section count
     }
 
     public void shutdown() {

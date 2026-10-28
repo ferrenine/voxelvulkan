@@ -12,7 +12,7 @@ import net.fabricmc.loader.api.FabricLoader;
  * Registers Voxel network channels and payloads on Fabric.
  */
 public class VoxelNetworking {
-    public static final String PROTOCOL_VERSION = "1";
+    public static final int PROTOCOL_VERSION = 1;
 
     public static void register() {
         // Payload types must be registered on both ends of each direction.

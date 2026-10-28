@@ -3,6 +3,7 @@ package voxel.network.payload;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import voxel.common.world.SectionSerializationUtil;
 import net.minecraft.resources.Identifier;
 
 /**
@@ -16,7 +17,8 @@ public record VoxelLodDataPayload(long sectionKey, int detailLevel, byte[] compr
                 buf.writeVarInt(payload.detailLevel);
                 buf.writeByteArray(payload.compressedVoxelData);
             },
-            buf -> new VoxelLodDataPayload(buf.readLong(), buf.readVarInt(), buf.readByteArray())
+            buf -> new VoxelLodDataPayload(buf.readLong(), buf.readVarInt(),
+                    buf.readByteArray(SectionSerializationUtil.BIGGEST_SERIALIZED_SECTION_SIZE))
     );
 
     @Override

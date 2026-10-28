@@ -15,6 +15,7 @@ import voxel.client.core.util.ExpandingObjectAllocationList;
 import voxel.common.Logger;
 import voxel.common.util.MemoryBuffer;
 import voxel.common.world.WorldEngine;
+import voxel.commonimpl.VoxelCommon;
 import org.lwjgl.system.MemoryUtil;
 
 import java.util.List;
@@ -23,17 +24,18 @@ import static voxel.common.world.WorldEngine.MAX_LOD_LAYER;
 import static voxel.common.world.WorldEngine.UPDATE_TYPE_BLOCK_BIT;
 
 
-//AUDIT-FIXME CRITICAL: if a node is a top level section and is empty, when a child is tried to be made it explodes
-// since all the children are empty
-//  To properly fix this, the top level nodes should only exist if there are non empty children
-// (issues related to this fix, lod updates from 0 children state to something children state, aswell as other way round)
+//Fixed: an empty top-level section is a leaf with child mask 0 and no in-flight request. When it later
+//becomes non-empty, processChildChange starts a fresh child request through maybeRequestTopLevelChildren().
+//The old code left an empty (already satisfied) request alive and could then leave a leaf with a non-zero
+//child mask and a null child pointer, which nothing could expand. See NodeManagerLifecycleTest.
 
 
 public class NodeManager {
-    private static final boolean VERIFY_NODE_MANAGER_OPERATIONS = true;//VoxelCommon.isVerificationFlagOn("nodeManager");
+    private static final boolean VERIFY_NODE_MANAGER_OPERATIONS = VoxelCommon.isVerificationFlagOn("nodeManager");
     //Assumptions:
-    // all nodes have children (i.e. all nodes have at least one child existence bit set at all times)
+    // all inner nodes have at least one child existence bit set
     // leaf nodes always contain geometry (empty geometry counts as geometry (it just doesnt take any memory to store))
+    // a leaf may have an empty child mask; it expands through processChildChange when children appear
     // All nodes except top nodes have parents
 
     //NOTE:
@@ -68,10 +70,10 @@ public class NodeManager {
     public static final int SENTINEL_EMPTY_CHILD_PTR = NodeStore.NODE_ID_MSK-1;
 
     public static final int NODE_ID_MSK = ((1<<24)-1);
-    private static final int NODE_TYPE_MSK = 0b11<<30;
-    private static final int NODE_TYPE_LEAF = 0b00<<30;
-    private static final int NODE_TYPE_INNER = 0b01<<30;
-    private static final int NODE_TYPE_REQUEST = 0b10<<30;
+    static final int NODE_TYPE_MSK = 0b11<<30;
+    static final int NODE_TYPE_LEAF = 0b00<<30;
+    static final int NODE_TYPE_INNER = 0b01<<30;
+    static final int NODE_TYPE_REQUEST = 0b10<<30;
 
     private static final int REQUEST_TYPE_SINGLE = 0b0<<29;
     private static final int REQUEST_TYPE_CHILD = 0b1<<29;
@@ -246,6 +248,11 @@ public class NodeManager {
             if (this.updateNodeGeometry(nodeId, sectionResult) != 0) {
                 this.invalidateNode(nodeId);
             }
+            // A top-level leaf can have children in its mask but no parent
+            // request to create them (empty section that became non-empty
+            // while its geometry was still in flight). Start that request once
+            // the geometry is available.
+            this.maybeRequestTopLevelChildren(pos, nodeId);
         } else {
             throw new IllegalStateException();
         }
@@ -385,10 +392,41 @@ public class NodeManager {
             }
 
             //Just need to update the child node data, nothing else
-            this.nodeData.setNodeChildExistence(nodeId&NODE_ID_MSK, childExistence);
+            int leafNodeId = nodeId&NODE_ID_MSK;
+            this.nodeData.setNodeChildExistence(leafNodeId, childExistence);
             //Need to resubmit to gpu
-            this.invalidateNode(nodeId&NODE_ID_MSK);//TODO:FIXME: Do we???
+            this.invalidateNode(leafNodeId);//TODO:FIXME: Do we???
+
+            // An empty top-level section is a leaf with no in-flight request.
+            // If it becomes non-empty there is no parent request to create the
+            // child nodes, so start one here instead of leaving a leaf with a
+            // non-zero child mask and a null child pointer.
+            this.maybeRequestTopLevelChildren(pos, leafNodeId);
         }
+    }
+
+    /**
+     * Starts a child request for a top-level leaf that already has a non-zero
+     * child mask but no request (the parent would normally provide one).
+     * Without this a top-level empty section that later gains children stays
+     * a leaf forever: its mask says children exist but there is no child ptr,
+     * no request, and therefore nothing that can ever finish it.
+     */
+    private void maybeRequestTopLevelChildren(long pos, int nodeId) {
+        if (!this.topLevelNodes.contains(pos)) {
+            return;
+        }
+        int current = this.activeSectionMap.get(pos);
+        if (current == -1 || (current&NODE_TYPE_MSK) != NODE_TYPE_LEAF) {
+            return;
+        }
+        if (this.nodeData.isNodeRequestInFlight(nodeId)) {
+            return;
+        }
+        if (this.nodeData.getNodeChildExistence(nodeId) == 0) {
+            return;
+        }
+        this.processRequest(pos);
     }
 
     private void updateChildSectionsInner(long pos, int nodeId, byte childExistence) {
@@ -1150,12 +1188,15 @@ public class NodeManager {
         byte childExistence = this.nodeData.getNodeChildExistence(nodeId);
 
         if (childExistence == 0) {
-            if (!this.topLevelNodes.contains(pos)) {//Top level nodes are special, as they can have a request with child existence of 0 for performance reasons
-                Logger.warn("Not creating a leaf request with existence mask of 0 at pos", WorldEngine.pprintPos(pos));
-                this.nodeData.unmarkRequestInFlight(nodeId);
-                this.invalidateNode(nodeId);
-                return;
-            }
+            // Nothing to request. Keeping an empty (already satisfied) request
+            // alive was the old top-level special case: it left the node with
+            // an in-flight request that only a later child update could
+            // finish. A later processChildChange now starts a fresh request
+            // when the mask becomes non-zero, so there is no reason to keep
+            // the empty one around.
+            this.nodeData.unmarkRequestInFlight(nodeId);
+            this.invalidateNode(nodeId);
+            return;
         }
 
         //Enqueue a leaf expansion request
@@ -1421,6 +1462,17 @@ public class NodeManager {
         debug.add("NC/IF: " + this.activeSectionMap.size() + "/" + (this.singleRequests.count() + this.childRequests.count()));
     }
 
+    /** Package-private probe for the GPU-free lifecycle tests. */
+    int nodeTypeAt(long pos) {
+        int id = this.activeSectionMap.get(pos);
+        return id == -1 ? -1 : id&NODE_TYPE_MSK;
+    }
+
+    /** Package-private probe for the GPU-free lifecycle tests. */
+    int activeRequestCount() {
+        return this.activeNodeRequestCount;
+    }
+
     public int getCurrentMaxNodeId() {
         return this.nodeData.getEndNodeId();
     }
@@ -1516,9 +1568,7 @@ public class NodeManager {
                     throw new IllegalStateException();
                 }
                 if (req.isSatisfied()) {//If a request is satisfied it should not be in the array
-                    //The exception to this rule is the top level nodes, and only if they are leaf nodes
-                    if (!(type == NODE_TYPE_LEAF && this.topLevelNodes.contains(pos)))
-                        throw new IllegalStateException();
+                    throw new IllegalStateException("Satisfied request left in flight at " + WorldEngine.pprintPos(pos));
                 }
             }
 
