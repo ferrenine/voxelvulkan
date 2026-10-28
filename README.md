@@ -17,39 +17,11 @@ A GPU-driven voxel LOD renderer for **Minecraft 1.21.11 (Fabric)**, running on *
 - **Mod Loader**: Fabric Loader + Fabric API
 - **Renderer**: VulkanMod 0.6.8+ (the build is compiled and tested against 0.6.8)
 - **Java**: 21 (recommended)
-- **GPU**: Vulkan 1.1+ with compute and `shaderInt64`; 4 GB of VRAM is the practical minimum, 8 GB+ recommended
-- **Platforms**: Windows x86_64 (the only tested and supported platform)
+- **GPU**: Vulkan 1.1+ with compute and `shaderInt64`
+- **Tested configuration**: Windows x86_64 with an NVIDIA GeForce RTX 4060 Laptop GPU; AMD and Intel GPUs are untested.
 - **Optional**: Beryl 0.2.1-alpha (shader pipeline integration)
 
-### Hybrid-graphics laptops
-
-Voxel requires `shaderInt64` and compute support from the Vulkan device that
-Minecraft actually uses. Many Intel integrated GPUs do not expose
-`shaderInt64`; on a hybrid laptop that is still rendering through the iGPU,
-Voxel disables itself for the whole session and logs:
-
-```text
-Voxel Vulkan capabilities: device=Intel(...), int64=false, supported=false
-Voxel disabled: required Vulkan features missing (... shaderInt64=false ...)
-```
-
-Select the discrete GPU before launching the game:
-
-- enable **MUX / Discrete GPU / dGPU only** in the laptop vendor utility
-  (for example ControlCenter, Armoury Crate, OMEN Gaming Hub) and reboot if
-  the utility asks for it; or
-- set `javaw.exe` to **High performance** in Windows *Settings > System >
-  Display > Graphics*, and select the NVIDIA/AMD GPU in the driver control
-  panel; or
-- use a display output that is wired directly to the discrete GPU.
-
-After relaunching, the log must show the NVIDIA/AMD device with
-`int64=true` and `supported=true`, followed by `Voxel render system created`.
-If it still names the Intel device, the game is still on the iGPU; changing
-Voxel settings cannot work around the missing `shaderInt64` feature.
-
-The release jar targets Windows x86_64. Linux, macOS, 32-bit and other
-architectures are not tested or supported.
+The release jar targets Windows x86_64.
 
 ## Installation
 
