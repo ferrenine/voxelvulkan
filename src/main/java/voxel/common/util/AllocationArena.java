@@ -203,6 +203,7 @@ public class AllocationArena {
             if (this.totalSize + extra > this.sizeLimit) {
                 return false;
             }
+            this.resized = true;
             this.takenSize[i] = size + extra;
             this.totalSize += extra;
             return true;

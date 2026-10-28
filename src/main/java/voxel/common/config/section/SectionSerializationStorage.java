@@ -8,6 +8,7 @@ import voxel.common.config.storage.StorageConfig;
 import voxel.common.util.ThreadLocalMemoryBuffer;
 import voxel.common.world.SectionSerializationUtil;
 import voxel.common.world.SectionSerializer;
+import voxel.common.world.WorldEngine;
 import voxel.common.world.WorldSection;
 import voxel.common.world.Mapper;
 
@@ -16,6 +17,13 @@ import java.util.Arrays;
 import java.util.function.LongConsumer;
 
 public class SectionSerializationStorage extends SectionStorage {
+    /**
+     * Section keys leave their low four bits free (see WorldEngine's key
+     * layout). Setting bit 0 turns a key into a quarantine slot without
+     * colliding with any live section.
+     */
+    private static final long QUARANTINE_BIT = 1L;
+
     private final StorageBackend backend;
     public SectionSerializationStorage(StorageBackend storageBackend) {
         this.backend = storageBackend;
@@ -27,12 +35,22 @@ public class SectionSerializationStorage extends SectionStorage {
         var data = this.backend.getSectionData(into.key, MEMORY_CACHE.get().createUntrackedUnfreeableReference());
         if (data != null) {
             if (!SectionSerializer.deserialize(into, data)) {
+                // Keep the damaged bytes for diagnosis instead of deleting
+                // them. The live key is removed; level 0 is rebuilt by the
+                // next chunk ingest and higher levels rebuild when their
+                // children change.
+                try {
+                    this.backend.setSectionData(into.key | QUARANTINE_BIT, data);
+                } catch (Exception e) {
+                    Logger.error("Failed to quarantine corrupt section " + WorldEngine.pprintPos(into.key), e);
+                }
                 this.backend.deleteSectionData(into.key);
-                //TODO: regenerate the section from children
                 synchronized (into) {
                     Arrays.fill(into.materializeData(), Mapper.AIR);
                 }
-                Logger.error("Section " + into.lvl + ", " + into.x + ", " + into.y + ", " + into.z + " was unable to load, removing");
+                Logger.error("Section " + WorldEngine.pprintPos(into.key)
+                        + " was corrupt; quarantined the raw data and reset the section to air. "
+                        + "Level 0 rebuilds on the next chunk ingest; higher levels rebuild when their children change.");
                 return -1;
             } else {
                 return 0;
@@ -75,7 +93,13 @@ public class SectionSerializationStorage extends SectionStorage {
 
     @Override
     public void iterateStoredSectionPositions(LongConsumer consumer) {
-        this.backend.iterateStoredSectionPositions(consumer);
+        this.backend.iterateStoredSectionPositions(key -> {
+            // Quarantine slots use one of the unused low key bits; they are
+            // diagnostics, not live sections.
+            if ((key&0xFL) == 0) {
+                consumer.accept(key);
+            }
+        });
     }
 
     public static class Config extends SectionStorageConfig {

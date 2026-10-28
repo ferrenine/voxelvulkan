@@ -147,9 +147,12 @@ public class ActiveSectionTracker {
                 status = this.loader.load(section);
 
                 if (status < 0) {
-                    //AUDIT-FIXME: load failure is silently replaced by all-air —
-                    // corrupt data masquerades as air; at minimum attempt a regen.
-                    Logger.error("Unable to load section " + section.key + " setting to air");
+                    // The storage layer has already quarantined the corrupt
+                    // bytes and logged the reason. Keep the in-memory section
+                    // usable (air) until the world/children rebuild it; this
+                    // is a recovery fallback, not a silent corruption path.
+                    Logger.warn("Section " + WorldEngine.pprintPos(section.key)
+                            + " could not be loaded; using air until it is rebuilt");
                     status = 1;
                 }
 

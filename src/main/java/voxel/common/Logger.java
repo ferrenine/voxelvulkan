@@ -98,7 +98,10 @@ public class Logger {
             return "NULL";
         }
         if (obj.getClass().isArray()) {
-            return Arrays.deepToString((Object[]) obj);
+            //Wrap first: deepToString handles primitive arrays correctly, while
+            //casting int[]/long[] to Object[] threw ClassCastException.
+            String rendered = Arrays.deepToString(new Object[]{obj});
+            return rendered.substring(1, rendered.length() - 1);
         }
         return obj.toString();
     }

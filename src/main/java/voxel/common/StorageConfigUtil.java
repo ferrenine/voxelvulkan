@@ -6,7 +6,9 @@ import voxel.common.config.section.SectionSerializationStorage;
 import voxel.common.config.section.SectionStorageConfig;
 import voxel.common.config.storage.other.CompressionStorageAdaptor;
 import voxel.common.config.storage.rocksdb.RocksDBStorageBackend;
+import voxel.common.util.AtomicFiles;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.function.Predicate;
@@ -24,7 +26,7 @@ public class StorageConfigUtil {
         T config = null;
         if (Files.exists(json)) {
             try {
-                config = Serialization.GSON.fromJson(Files.readString(json), clz);
+                config = Serialization.GSON.fromJson(Files.readString(json, StandardCharsets.UTF_8), clz);
                 if (config == null) {
                     Logger.error("Config deserialization null, reverting to default");
                 } else {
@@ -42,7 +44,7 @@ public class StorageConfigUtil {
             config = defaultConfig.get();
         }
         try {
-            Files.writeString(json, Serialization.GSON.toJson(config));
+            AtomicFiles.writeString(json, Serialization.GSON.toJson(config));
         } catch (Exception e) {
             throw new RuntimeException("Failed write the config, aborting!", e);
         }
