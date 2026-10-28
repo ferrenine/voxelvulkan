@@ -18,7 +18,7 @@ A GPU-driven voxel LOD renderer for **Minecraft 1.21.11 (Fabric)**, running on *
 - **Renderer**: VulkanMod 0.6.8+ (the build is compiled and tested against 0.6.8)
 - **Java**: 21 (recommended)
 - **GPU**: Vulkan 1.1+ with compute and `shaderInt64`; 4 GB of VRAM is the practical minimum, 8 GB+ recommended
-- **Platforms**: Windows x86_64, Linux x86_64/aarch64 (glibc or musl), macOS x86_64/arm64
+- **Platforms**: Windows x86_64 (the only tested and supported platform)
 - **Optional**: Beryl 0.2.1-alpha (shader pipeline integration)
 
 ### Hybrid-graphics laptops
@@ -48,8 +48,8 @@ After relaunching, the log must show the NVIDIA/AMD device with
 If it still names the Intel device, the game is still on the iGPU; changing
 Voxel settings cannot work around the missing `shaderInt64` feature.
 
-The release jar contains desktop-only storage natives; 32-bit and other
-architectures are not packaged.
+The release jar targets Windows x86_64. Linux, macOS, 32-bit and other
+architectures are not tested or supported.
 
 ## Installation
 
