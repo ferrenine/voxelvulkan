@@ -21,7 +21,7 @@ import static org.lwjgl.vulkan.VK11.VK_SUBGROUP_FEATURE_BASIC_BIT;
  */
 public class Capabilities {
 
-    public static final Capabilities INSTANCE = new Capabilities();
+    public static Capabilities INSTANCE = new Capabilities();
 
     public final boolean repFragTest;
     public final boolean meshShaders;
@@ -133,6 +133,11 @@ public class Capabilities {
     }
 
     public static void init() {
+        // Re-probe after VulkanMod has created the device. The class can be
+        // loaded while DeviceManager.device is still null (settings/mod-menu
+        // class loading), and a cached "unsupported" probe would then disable
+        // the renderer forever.
+        INSTANCE = new Capabilities();
     }
 
     /**

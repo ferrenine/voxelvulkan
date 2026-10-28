@@ -45,8 +45,26 @@ public class VoxelClient implements ClientModInitializer {
         // AUDIT-FIXME: INT64_t checked because quads3.vert, cmdgen.comp and
         // buildtranslucents.comp unconditionally `#extension GL_ARB_gpu_shader_int64
         // : require` — without it shader compilation hard-fails at runtime.
-        boolean systemSupported = Capabilities.INSTANCE.compute && Capabilities.INSTANCE.indirectParameters
-                && Capabilities.INSTANCE.INT64_t && !Capabilities.INSTANCE.hasBrokenDepthSampler;
+        var caps = Capabilities.INSTANCE;
+        var device = net.vulkanmod.vulkan.device.DeviceManager.device;
+        boolean systemSupported = caps.compute && caps.indirectParameters
+                && caps.INT64_t && !caps.hasBrokenDepthSampler;
+        Logger.info("Voxel Vulkan capabilities: device="
+                + (device != null && device.deviceName != null ? device.deviceName : "null")
+                + ", compute=" + caps.compute
+                + ", indirect=" + caps.indirectParameters
+                + ", int64=" + caps.INT64_t
+                + ", subgroup=" + caps.subgroup
+                + ", supported=" + systemSupported);
+        if (!systemSupported) {
+            Logger.error("Voxel disabled: required Vulkan features missing"
+                    + " (compute=" + caps.compute
+                    + ", drawIndirectCount=" + caps.indirectParameters
+                    + ", shaderInt64=" + caps.INT64_t
+                    + ", device=" + (device != null ? "present" : "null") + ")."
+                    + " Restart the game; if it persists, update the GPU driver or"
+                    + " check other VulkanMod/Sodium mods.");
+        }
         if (systemSupported) {
             SharedIndexBuffer.INSTANCE.id();
             BudgetBufferRenderer.init();
