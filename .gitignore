@@ -31,5 +31,8 @@ Thumbs.db
 # Local pre-change archives (never committed)
 _backup-*/
 
-# Local dev/debug scripts (RenderDoc launcher, ad-hoc dumps)
-tools/
+# Local dev/debug scripts (ad-hoc dumps); the RenderDoc launcher is part of
+# the build (build.gradle references it from runClientRenderDoc).
+tools/*
+!tools/renderdoc-layer-launcher.cmd
+!tools/renderdoc-layer-launcher.ps1

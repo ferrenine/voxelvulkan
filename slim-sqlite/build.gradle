@@ -1,0 +1,46 @@
+plugins {
+    id 'java'
+}
+
+// Build-only helper: repackage sqlite-jdbc with the 64-bit desktop natives
+// only. SQLite is used exclusively by the Distant Horizons importer; the
+// classes and desktop native layout must stay intact.
+group = 'org.xerial'
+version = '3.49.1.0-slim'
+
+base {
+    archivesName = 'sqlite-jdbc'
+}
+
+repositories {
+    mavenCentral()
+}
+
+configurations {
+    sqlite
+}
+
+dependencies {
+    sqlite 'org.xerial:sqlite-jdbc:3.49.1.0'
+}
+
+tasks.named('jar') {
+    archiveBaseName = 'sqlite-jdbc'
+    archiveVersion = '3.49.1.0-slim'
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from({ zipTree(configurations.sqlite.singleFile) }) {
+        exclude 'META-INF/MANIFEST.MF'
+        // Keep Linux/Mac/Windows 64-bit (x86_64 + aarch64) and Linux musl.
+        exclude 'org/sqlite/native/FreeBSD/**'
+        exclude 'org/sqlite/native/Linux/ppc64/**'
+        exclude 'org/sqlite/native/Linux/arm*/**'
+        exclude 'org/sqlite/native/Linux/x86/**'
+        exclude 'org/sqlite/native/Linux/riscv64/**'
+        exclude 'org/sqlite/native/Linux-Musl/x86/**'
+        exclude 'org/sqlite/native/Windows/armv7/**'
+        exclude 'org/sqlite/native/Windows/x86/**'
+        exclude 'org/sqlite/native/Linux-Android/**'
+    }
+}

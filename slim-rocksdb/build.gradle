@@ -1,0 +1,42 @@
+plugins {
+    id 'java'
+}
+
+// Build-only helper: repackage rocksdbjni with the 64-bit desktop natives only.
+// The result is nested into the Voxel jar by the root project's `include`
+// configuration. This project is not a mod and is never published.
+group = 'org.rocksdb'
+version = '10.2.1-slim'
+
+base {
+    archivesName = 'rocksdbjni'
+}
+
+repositories {
+    mavenCentral()
+}
+
+configurations {
+    rocksdb
+}
+
+dependencies {
+    rocksdb 'org.rocksdb:rocksdbjni:10.2.1'
+}
+
+tasks.named('jar') {
+    archiveBaseName = 'rocksdbjni'
+    archiveVersion = '10.2.1-slim'
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from({ zipTree(configurations.rocksdb.singleFile) }) {
+        exclude 'META-INF/MANIFEST.MF'
+        // Keep win64, linux64 (glibc + musl), linux-aarch64 (glibc + musl),
+        // macOS x86_64 and macOS arm64. Drop 32-bit, ppc64le, s390x and riscv64.
+        exclude '**/librocksdbjni-linux32*'
+        exclude '**/librocksdbjni-linux-ppc64le*'
+        exclude '**/librocksdbjni-linux-s390x*'
+        exclude '**/librocksdbjni-linux-riscv64*'
+    }
+}

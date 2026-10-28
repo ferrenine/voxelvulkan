@@ -33,7 +33,7 @@
     "minecraft": "~1.21.11",
     "java": ">=21",
     "fabric-api": "*",
-    "vulkanmod": ">=0.6.7"
+    "vulkanmod": ">=0.6.8"
   },
   "recommends": {
     "beryl": ">=0.2.0",

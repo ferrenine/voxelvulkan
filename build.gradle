@@ -56,12 +56,16 @@ dependencies {
     // Renderer platform: VulkanMod (required at runtime, provided by user)
     // Beryl (optional, shader pipeline integration)
     // ------------------------------------------------------------------
-    modCompileOnly files('libs/VulkanMod-0.6.8+1.21.11.jar')
-    modLocalRuntime files('libs/VulkanMod-0.6.8+1.21.11.jar')
+    def vulkanmodJar = files("libs/VulkanMod-${project.vulkanmod_version}.jar")
+    def berylJar = files("libs/beryl_${project.minecraft_version}-${project.beryl_version}.jar")
+    def modmenuJar = files("libs/modmenu-${project.modmenu_version}.jar")
 
-    modCompileOnly files('libs/beryl_1.21.11-0.2.1-alpha.jar')
+    modCompileOnly vulkanmodJar
+    modLocalRuntime vulkanmodJar
+
+    modCompileOnly berylJar
     // Optional Mod Menu entrypoint; the jar is only needed for compilation.
-    modCompileOnly files('libs/modmenu-17.0.1.jar')
+    modCompileOnly modmenuJar
 
     // LWJGL bindings used directly. Compile against the Maven artifacts; in a normal installation
     // the classes are provided at runtime by VulkanMod's jar-in-jar (META-INF/jars/lwjgl-*.jar).
@@ -76,20 +80,32 @@ dependencies {
     //   java.lang.NoClassDefFoundError: org/lwjgl/vulkan/VkApplicationInfo
     //   Caused by: java.lang.ClassNotFoundException: org.lwjgl.vulkan.VkApplicationInfo
     //       at net.vulkanmod.vulkan.Vulkan.createInstance(Vulkan.java:209)
-    // lwjgl-vulkan ships no Windows/Linux natives (it binds the system vulkan-1.dll / libvulkan.so);
-    // add :natives-linux / :natives-macos(-arm64) for lwjgl-vma and lwjgl-shaderc on those platforms.
+    // lwjgl-vulkan ships no native library (it binds the system vulkan-1.dll / libvulkan.so);
+    // the VMA and shaderc natives are dev-runtime only and cover every desktop platform.
     runtimeOnly "org.lwjgl:lwjgl-vulkan:$lwjglVersion"
     runtimeOnly "org.lwjgl:lwjgl-vma:$lwjglVersion"
     runtimeOnly "org.lwjgl:lwjgl-vma:$lwjglVersion:natives-windows"
+    runtimeOnly "org.lwjgl:lwjgl-vma:$lwjglVersion:natives-linux"
+    runtimeOnly "org.lwjgl:lwjgl-vma:$lwjglVersion:natives-macos"
+    runtimeOnly "org.lwjgl:lwjgl-vma:$lwjglVersion:natives-macos-arm64"
     runtimeOnly "org.lwjgl:lwjgl-shaderc:$lwjglVersion"
     runtimeOnly "org.lwjgl:lwjgl-shaderc:$lwjglVersion:natives-windows"
+    runtimeOnly "org.lwjgl:lwjgl-shaderc:$lwjglVersion:natives-linux"
+    runtimeOnly "org.lwjgl:lwjgl-shaderc:$lwjglVersion:natives-macos"
+    runtimeOnly "org.lwjgl:lwjgl-shaderc:$lwjglVersion:natives-macos-arm64"
 
     // ------------------------------------------------------------------
     // LOD storage engines (jar-in-jar)
     // ------------------------------------------------------------------
-    include(implementation('org.rocksdb:rocksdbjni:10.2.1'))
+    // Compile/dev classpath uses the original artifact; the published jar
+    // nests the slim desktop-only repack from the :slim-rocksdb subproject.
+    implementation 'org.rocksdb:rocksdbjni:10.2.1'
+    include project(':slim-rocksdb')
     include(implementation('org.tukaani:xz:1.10'))
-    include(implementation('org.xerial:sqlite-jdbc:3.49.1.0'))
+    // Dev classpath uses the full driver; the published jar nests the
+    // desktop-only repack from the :slim-sqlite subproject.
+    implementation 'org.xerial:sqlite-jdbc:3.49.1.0'
+    include project(':slim-sqlite')
 
     // LMDB / ZSTD through LWJGL bindings (classes provided by MC's LWJGL, natives bundled here)
     include(implementation("org.lwjgl:lwjgl-lmdb:$lwjglVersion"))
@@ -98,6 +114,8 @@ dependencies {
     include(runtimeOnly("org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-windows"))
     include(runtimeOnly("org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-linux"))
     include(runtimeOnly("org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-linux"))
+    include(runtimeOnly("org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-linux-arm64"))
+    include(runtimeOnly("org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-linux-arm64"))
     include(runtimeOnly("org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-macos"))
     include(runtimeOnly("org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-macos"))
     include(runtimeOnly("org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-macos-arm64"))
@@ -106,6 +124,17 @@ dependencies {
     // Redis backend (optional)
     include(implementation('redis.clients:jedis:5.1.0'))
     include(implementation('org.apache.commons:commons-pool2:2.12.0'))
+
+    // ------------------------------------------------------------------
+    // Tests (pure-Java helpers; no Minecraft bootstrap required)
+    // ------------------------------------------------------------------
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
 }
 
 processResources {
@@ -135,6 +164,9 @@ jar {
     from("LICENSE") {
         rename { "${it}_${project.base.archivesName.get()}" }
     }
+    from("THIRD_PARTY_NOTICES.md") {
+        rename { "${it}_${project.base.archivesName.get()}" }
+    }
 }
 
 publishing {
@@ -161,7 +193,11 @@ publishing {
 // 会自动跟着换包，全程不联网。
 // ============================================================
 def renderDocVersion = '1.46_64'                                                 // 与 zip 内顶层目录同名
-def renderDocZip     = file('D:/package/Github Resource/RenderDoc_1.46_64.zip')  // 本地离线包
+// 本地离线包；换机器时用 -PrenderdocZip=... 或 RENDERDOC_ZIP 环境变量覆盖。
+def renderDocZipPath = project.findProperty('renderdocZip')
+        ?: System.getenv('RENDERDOC_ZIP')
+        ?: 'D:/package/Github Resource/RenderDoc_1.46_64.zip'
+def renderDocZip     = file(renderDocZipPath)
 def renderDocOutDir  = layout.buildDirectory.dir('renderdoc')
 
 tasks.named('downloadRenderDoc').configure { t ->

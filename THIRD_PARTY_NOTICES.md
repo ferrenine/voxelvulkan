@@ -15,5 +15,7 @@ by the project's LGPL-3.0 license; each remains under its own license.
 | Zstandard | bundled with LWJGL | BSD-3-Clause | ZSTD compression backend |
 
 The full license texts are shipped inside the corresponding nested jars under
-`META-INF/`. Minecraft, Fabric Loader, Fabric API, VulkanMod, Beryl and
-Mod Menu are runtime dependencies and are not bundled by this project.
+`META-INF/`. The published jar uses desktop-only repacks of RocksDB and SQLite
+JDBC to keep the download small; the complete artifacts are used on the
+development classpath. Minecraft, Fabric Loader, Fabric API, VulkanMod, Beryl
+and Mod Menu are runtime dependencies and are not bundled by this project.
